@@ -15,6 +15,11 @@
 #
 # GitHub also disables scheduled workflows in repos with no commits for 60
 # days. It emails you first; a single commit re-enables them.
+#
+# The Telegram bot works here too, but only as fast as this schedule: a button
+# press is answered on the next run, so up to 5-20 minutes later. For a bot
+# that replies instantly you need a long-running process -- `watch.py bot` on
+# a VM (see the README).
 name: watch
 
 on:
@@ -50,13 +55,13 @@ jobs:
           BMS_DESKTOP: "0"
         run: python watch.py check
 
-      - name: Remember what we already alerted on
+      - name: Persist alert state and any watches added from Telegram
         run: |
-          if [[ -n "$(git status --porcelain state.json)" ]]; then
+          if [[ -n "$(git status --porcelain state.json watches.json)" ]]; then
             git config user.name  "bms-watchdog"
             git config user.email "bot@users.noreply.github.com"
-            git add state.json
-            git commit -m "state: record alerts [skip ci]"
+            git add state.json watches.json
+            git commit -m "state: record alerts and watches [skip ci]"
             # another run may have pushed while this one was checking
             git push || { git pull --rebase --autostash -q && git push; }
           fi

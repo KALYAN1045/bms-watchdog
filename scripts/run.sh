@@ -8,4 +8,4 @@ if [[ -f .env ]]; then
   set -a; source .env; set +a
 fi
 
-exec ./venv/bin/python watch.py "${@:-run}"
+exec ./venv/bin/python watch.py "${@:-bot}"

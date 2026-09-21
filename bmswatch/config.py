@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -76,6 +77,7 @@ class Watch:
     time_from: int = 0
     time_to: int = 24 * 60
     enabled: bool = True
+    chat_id: str = ""            # set for watches created from Telegram
 
     def resolved_dates(self, open_dates: List[str]) -> List[str]:
         if self.dates:
@@ -139,6 +141,7 @@ class Settings:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     desktop: DesktopConfig = field(default_factory=DesktopConfig)
     watches: List[Watch] = field(default_factory=list)
+    store_path: str = "watches.json"
 
 
 def _build_watch(raw: Dict[str, Any], defaults: Dict[str, Any], index: int) -> Watch:
@@ -190,7 +193,18 @@ def _build_watch(raw: Dict[str, Any], defaults: Dict[str, Any], index: int) -> W
         time_from=time_from,
         time_to=time_to,
         enabled=bool(merged.get("enabled", True)),
+        chat_id=str(merged.get("chat_id") or ""),
     )
+
+
+def _store_watches(store_path: Path) -> List[Dict[str, Any]]:
+    if not store_path.exists():
+        return []
+    try:
+        blob = json.loads(store_path.read_text())
+    except (OSError, ValueError) as exc:
+        raise ConfigError(f"{store_path.name} is not readable JSON: {exc}") from None
+    return [w for w in (blob.get("watches") or []) if isinstance(w, dict)]
 
 
 def load(path: str | Path) -> Settings:
@@ -201,8 +215,6 @@ def load(path: str | Path) -> Settings:
 
     defaults = data.get("defaults") or {}
     raw_watches = data.get("watches") or []
-    if not raw_watches:
-        raise ConfigError("watchlist has no 'watches' entries")
 
     tg_raw = data.get("telegram") or {}
     desktop_raw = data.get("desktop") or {}
@@ -232,8 +244,14 @@ def load(path: str | Path) -> Settings:
             repeat_count=int(desktop_raw.get("repeat_count", 8)),
             repeat_every_seconds=int(desktop_raw.get("repeat_every_seconds", 30)),
         ),
+        store_path=str(defaults.get("store_path", "watches.json")),
         watches=[_build_watch(w, defaults, i) for i, w in enumerate(raw_watches)],
     )
+
+    # watches created from Telegram live in their own JSON file
+    store_file = path.parent / settings.store_path
+    for i, raw in enumerate(_store_watches(store_file)):
+        settings.watches.append(_build_watch(raw, defaults, len(raw_watches) + i))
 
     seen = set()
     for watch in settings.watches:

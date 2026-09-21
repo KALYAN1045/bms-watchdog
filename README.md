@@ -45,7 +45,7 @@ need it.
 
 ---
 
-## 1. Configure it (10 minutes)
+## 1. Connect Telegram (5 minutes)
 
 ```bash
 cd bms-watchdog
@@ -53,10 +53,8 @@ python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ```
 
-### Make a Telegram bot
-
-1. In Telegram, message **@BotFather** → `/newbot` → pick a name (the username
-   must end in `bot`). It replies with a token like `8012345678:AAE...`.
+1. In Telegram, message **@BotFather** → `/newbot` → pick a name (username must
+   end in `bot`). It replies with a token like `8012345678:AAE...`.
 2. Paste that token into `.env`:
 
    ```
@@ -73,53 +71,83 @@ python3 -m venv venv
    discovers your chat id, writes it to `.env`, and sends a confirmation.
    Your token is never printed — not even inside error messages.
 
-### Find your movie and your theatres
-
-```bash
-./venv/bin/python watch.py movies -q paradise
-```
-```
-ET00436621   the-paradise
-```
-```bash
-./venv/bin/python watch.py theatres -e ET00436621 -d 2026-09-25
-```
-```
-AAA Cinemas: Ameerpet          [2D LASER DOLBY ATMOS]
-AMB Cinemas: Gachibowli        [2D, IMAX 2D]
-Prasads Multiplex: Hyderabad   [2D PCX SCREEN]
-...
-```
-
-Copy any part of a name into `theatres:`. Matching is case-insensitive and
-**whole-word**, so `AMB` finds *AMB Cinemas* but not *Bh**ramaramba***.
-
-### Write your watchlist
-
-```bash
-cp watchlist.example.yaml watchlist.yaml
-```
-
-```yaml
-watches:
-  - id: paradise-prasads
-    movie: The Paradise
-    event_code: ET00436621
-    dates: [2026-09-25]
-    theatres: [Prasads, AMB Cinemas]
-    formats: [IMAX, PCX]      # empty = any format
-    languages: [Telugu]
-```
-
-### Prove it works
+## 2. Set up alerts by chatting to the bot
 
 ```bash
 source .env
+./venv/bin/python watch.py bot
+```
+
+Then open Telegram and send `/start`. Everything is buttons:
+
+```
+🎟 BookMyShow watchdog
+📍 no city set yet · 🔔 0 active alerts
+
+Which city are you booking in?
+[ 📍 Share my location ]        ← or just type "hyderabad"
+
+  ↓  tapped Share my location
+
+Closest BookMyShow cities to you:
+[ Hyderabad · 16 km ]  [ Secunderabad · 16 km ]  [ 🔍 Somewhere else ]
+
+  ↓
+
+Pick a movie  (32 listed)
+🎬 now showing · 🔜 coming soon
+[ 🎬 The Paradise ]
+[ 🔜 Avengers Endgame: Encore ]
+[ ◀ ]  [ 2/6 ]  [ ▶ ]
+[ 🔍 Search by name ]
+
+  ↓
+
+🎬 The Paradise
+Which theatres? Tap to select, or choose Any theatre.
+[ ☑️ AMB Cinemas: Gachibowli ]
+[ ▫️ Prasads Multiplex: Hyderabad ]
+[ 🏛 Any theatre ]  [ ✔ Done (1) ]
+
+  ↓  then dates, then:
+
+✅ Watching The Paradise
+Add as many as you like — /add for another, /list to manage them.
+```
+
+It picks your city from your phone's location (2,087 BookMyShow cities,
+nearest match), lists what's actually showing there with real titles, and
+offers the real theatre names pulled live for that film. For a movie whose
+booking hasn't opened, there are no theatres to list yet — it says so and
+watches all of them.
+
+| Command | Does |
+|---|---|
+| `/start` | Menu, and sets your city the first time |
+| `/add` | Create another alert — you can have as many as you like |
+| `/list` | See your alerts, each with a 🗑 button |
+| `/city` | Change city |
+| `/cancel` | Abandon a half-finished selection |
+
+Alerts are stored in `watches.json`. You never have to edit a config file —
+though `watchlist.yaml` still works if you prefer it, and the two are merged.
+
+### Checking it works
+
+```bash
 ./venv/bin/python watch.py doctor       # config + Telegram + live BookMyShow check
 ./venv/bin/python watch.py test-alert   # see exactly what an alert looks like
 ```
 
----
+### The CLI, if you'd rather
+
+```bash
+./venv/bin/python watch.py movies -q paradise          # find a movie's ET-code
+./venv/bin/python watch.py theatres -e ET00436621      # list theatre names
+```
+
+Then hand-write entries under `watches:` in `watchlist.yaml` — see
+`watchlist.example.yaml` for every option.
 
 ## 2. Run it somewhere that stays on
 
@@ -151,7 +179,9 @@ bash scripts/deploy.sh <user>@<external-ip>
 ```
 
 That syncs the folder, creates a venv, runs `doctor` **as a gate**, then
-installs a systemd service that starts at boot and restarts on crash. No
+installs a systemd service that starts at boot and restarts on crash. The
+service runs `watch.py bot`, so the Telegram bot answers instantly *and* the
+watching happens in the same process. No
 Docker, no browser — about 40 MB resident.
 
 ```bash
@@ -193,9 +223,14 @@ containerised, though on a 1 GB box systemd is the lighter choice.
 ### GitHub Actions — zero signup, but laggy
 
 `.github/workflows/watch.yml` runs on GitHub's free minutes with no card at
-all. The catch is timing: GitHub's cron has a 5-minute floor and is routinely
-5–20 minutes late. Fine as a backstop or for a quiet re-release; not for a
-first-day-first-show scramble.
+all. Two caveats. GitHub's cron has a 5-minute floor and is routinely 5–20
+minutes late — fine as a backstop, not for a first-day scramble. And the
+**bot replies at that same cadence**: `watch.py check` handles queued Telegram
+commands each run, so tapping a button gets an answer on the *next* run,
+minutes later. Workable for setting an alert once; unpleasant as a chat.
+
+For a bot that answers instantly, you need `watch.py bot` running
+continuously — that means a VM, not Actions.
 
 ### Your Mac
 

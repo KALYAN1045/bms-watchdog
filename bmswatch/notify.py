@@ -48,17 +48,54 @@ class Telegram:
             raise RuntimeError(f"Telegram {method} failed: {data.get('description')}")
         return data.get("result")
 
-    def send(self, text: str, buttons: Optional[List[dict]] = None, silent: bool = False):
+    def send(self, text: str, buttons: Optional[List[dict]] = None,
+             keyboard: Optional[List[List[dict]]] = None,
+             reply_markup: Optional[dict] = None, silent: bool = False,
+             chat_id: Optional[str] = None):
         payload = {
-            "chat_id": self.cfg.chat_id,
+            "chat_id": chat_id or self.cfg.chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
             "disable_notification": silent,
         }
-        if buttons:
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        elif keyboard is not None:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        elif buttons:
             payload["reply_markup"] = {"inline_keyboard": [buttons]}
         return self._call("sendMessage", **payload)
+
+    def edit(self, chat_id: str, message_id: int, text: str,
+             keyboard: Optional[List[List[dict]]] = None):
+        payload = {
+            "chat_id": chat_id, "message_id": message_id, "text": text,
+            "parse_mode": "HTML", "disable_web_page_preview": True,
+        }
+        if keyboard is not None:
+            payload["reply_markup"] = {"inline_keyboard": keyboard}
+        try:
+            return self._call("editMessageText", **payload)
+        except RuntimeError as exc:
+            if "not modified" in str(exc).lower():
+                return None
+            raise
+
+    def answer_callback(self, callback_id: str, text: str = "") -> None:
+        try:
+            self._call("answerCallbackQuery", callback_query_id=callback_id, text=text)
+        except Exception:
+            pass
+
+    def get_updates(self, offset: Optional[int] = None, timeout: int = 0,
+                    allowed: Optional[List[str]] = None) -> List[dict]:
+        kwargs: dict = {"timeout": timeout}
+        if offset is not None:
+            kwargs["offset"] = offset
+        if allowed:
+            kwargs["allowed_updates"] = allowed
+        return self._call("getUpdates", **kwargs) or []
 
     def drain(self) -> None:
         """Skip whatever is already queued so old messages can't fake an ack."""

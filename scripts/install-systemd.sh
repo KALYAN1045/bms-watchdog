@@ -35,7 +35,7 @@ User=$USER_NAME
 WorkingDirectory=$HERE
 EnvironmentFile=$HERE/.env
 Environment=BMS_DESKTOP=0
-ExecStart=$HERE/venv/bin/python $HERE/watch.py run
+ExecStart=$HERE/venv/bin/python $HERE/watch.py bot
 Restart=always
 RestartSec=15
 # it is a tiny process; keep it that way

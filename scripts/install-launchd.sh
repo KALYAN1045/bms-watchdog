@@ -17,7 +17,7 @@ cat > "$PLIST" <<PLISTEOF
   <key>ProgramArguments</key>
   <array>
     <string>$HERE/scripts/run.sh</string>
-    <string>run</string>
+    <string>bot</string>
   </array>
   <key>WorkingDirectory</key><string>$HERE</string>
   <key>RunAtLoad</key><true/>

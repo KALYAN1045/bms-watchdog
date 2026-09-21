@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """BookMyShow ticket watchdog -- CLI entry point.
 
+  python watch.py bot                         run the bot + watcher (recommended)
   python watch.py telegram-setup              connect Telegram, find your chat id
   python watch.py doctor                      check the setup end to end
   python watch.py movies --query paradise     find a movie's event code
@@ -18,8 +19,10 @@ import random
 import signal
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 import warnings
 
@@ -29,8 +32,10 @@ from bmswatch import config as configmod
 from bmswatch.bms import parse_showtimes
 from bmswatch.engine import check_watch, handle_result
 from bmswatch.fetcher import FetchError, make_session
+from bmswatch.bot import Bot
 from bmswatch.notify import Notifier
 from bmswatch.state import State
+from bmswatch.store import WatchStore
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = ROOT / "watchlist.yaml"
@@ -336,7 +341,8 @@ def cmd_doctor(args) -> int:
     return 0 if ok else 1
 
 
-def _run_pass(settings, state, notifier, verbose, pool: "SessionPool") -> None:
+def _run_pass(settings, state, notifier, verbose, pool: "SessionPool",
+              alert_sink=None) -> None:
     by_region = {}
     for watch in settings.watches:
         if watch.enabled:
@@ -358,22 +364,146 @@ def _run_pass(settings, state, notifier, verbose, pool: "SessionPool") -> None:
                 print(f"{datetime.now():%H:%M:%S} ⚠️  {watch.id}: {exc}", flush=True)
                 pool.drop(city, region)                 # start a clean browser next pass
                 break
-            handle_result(watch, result, state, notifier, verbose=True)
+            handle_result(watch, result, state, notifier, verbose=True,
+                          alert_sink=alert_sink)
             if result.status == "error":
                 pool.drop(city, region)
                 break
 
 
 def cmd_check(args) -> int:
+    """One pass, for cron or CI.
+
+    Bot commands queued since the last run are handled first, so the Telegram
+    interface still works without a long-running process -- at the cost of a
+    reply only arriving on the next scheduled run.
+    """
     settings = _load(args)
-    state = State(ROOT / settings.state_file)
     notifier = Notifier(settings.telegram, settings.desktop, verbose=args.verbose)
+
+    if notifier.telegram:
+        store = WatchStore(ROOT / settings.store_path)
+        changed = {"yes": False}
+
+        def factory(city: str, region: str):
+            return make_session(
+                engine=settings.engine, city=city, region_code=region,
+                profile_dir=ROOT / settings.profile_dir, channel=settings.channel,
+                window=settings.window, proxy=settings.proxy, verbose=args.verbose)
+
+        bot = Bot(notifier.telegram, store, factory, ROOT / ".cache",
+                  on_change=lambda: changed.__setitem__("yes", True),
+                  verbose=args.verbose)
+        handled = 0
+        for _ in range(12):                 # drain the queue, don't loop forever
+            n = bot.poll(timeout=0)
+            handled += n
+            if not n:
+                break
+        if handled:
+            print(f"handled {handled} bot update(s)", flush=True)
+        if changed["yes"]:
+            settings = _load(args)          # a watch was added or removed
+
+    state = State(ROOT / settings.state_file)
     pool = SessionPool(settings, args.verbose)
     try:
         _run_pass(settings, state, notifier, args.verbose, pool)
     finally:
         pool.close()
         state.save()
+    return 0
+
+
+@dataclass
+class PendingAlert:
+    """An alert mid-way through its repeat schedule."""
+    watch_id: str
+    chat_id: str
+    title: str
+    body: str
+    plain: str
+    url: str
+    rounds: int
+    sent: int = 0
+    next_at: float = 0.0
+
+
+def cmd_bot(args) -> int:
+    """Long-running: serve the Telegram bot and poll BookMyShow in one loop."""
+    settings = _load(args)
+    if not settings.telegram.configured:
+        sys.exit("Telegram isn't configured. Run:  python watch.py telegram-setup")
+
+    store = WatchStore(ROOT / settings.store_path)
+    notifier = Notifier(settings.telegram, settings.desktop, verbose=args.verbose)
+    telegram = notifier.telegram
+    telegram.drain()                     # ignore anything sent before we started
+
+    state = State(ROOT / settings.state_file)
+    pool = SessionPool(settings, args.verbose)
+    dirty = {"config": False}
+
+    def factory(city: str, region: str):
+        return make_session(
+            engine=settings.engine, city=city, region_code=region,
+            profile_dir=ROOT / settings.profile_dir, channel=settings.channel,
+            window=settings.window, proxy=settings.proxy, verbose=args.verbose)
+
+    bot = Bot(telegram, store, factory, ROOT / ".cache",
+              on_change=lambda: dirty.__setitem__("config", True),
+              verbose=args.verbose)
+
+    pending: List[PendingAlert] = []
+
+    def sink(watch, title, body, plain, url) -> None:
+        pending.append(PendingAlert(
+            watch_id=watch.id, chat_id=watch.chat_id or settings.telegram.chat_id,
+            title=title, body=body, plain=plain, url=url,
+            rounds=max(1, settings.telegram.repeat_count)))
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    print(f"Bot running as part of the watchdog. "
+          f"{len(settings.watches)} watch(es), checking every {settings.poll_seconds}s.")
+    print("Open Telegram and send /start")
+    notifier.info("🤖 Watchdog online. Send /start to set up alerts.", silent=True)
+
+    last_check = 0.0
+    while not _stop:
+        bot.poll(timeout=5)
+
+        # anything the user acknowledged stops repeating immediately
+        if bot.acked:
+            pending = [p for p in pending if p.watch_id not in bot.acked]
+
+        now = time.time()
+        still: List[PendingAlert] = []
+        for alert in pending:
+            if now >= alert.next_at:
+                alert.sent += 1
+                notifier.alert_once(alert.watch_id, alert.title, alert.body,
+                                    alert.plain, alert.url, round_no=alert.sent,
+                                    rounds=alert.rounds, chat_id=alert.chat_id)
+                alert.next_at = now + settings.telegram.repeat_every_seconds
+            if alert.sent < alert.rounds:
+                still.append(alert)
+        pending = still
+
+        if dirty["config"] or now - last_check >= settings.poll_seconds:
+            if dirty["config"]:
+                dirty["config"] = False
+                try:
+                    settings = _load(args)       # pick up watches the bot just added
+                except SystemExit:
+                    pass
+            _run_pass(settings, state, notifier, args.verbose, pool, alert_sink=sink)
+            state.save()
+            last_check = time.time()
+
+    pool.close()
+    notifier.info("🛑 Watchdog stopped.", silent=True)
     return 0
 
 
@@ -436,6 +566,8 @@ def main() -> int:
     add("check", "run one pass and exit").set_defaults(func=cmd_check)
     add("run", "poll continuously").set_defaults(func=cmd_run)
     add("test-alert", "send a fake alert").set_defaults(func=cmd_test_alert)
+    add("bot", "run the Telegram bot and the watcher together"
+        ).set_defaults(func=cmd_bot)
 
     p_tg = add("telegram-setup", "connect a Telegram bot and find your chat id")
     p_tg.add_argument("--wait", type=int, default=180,

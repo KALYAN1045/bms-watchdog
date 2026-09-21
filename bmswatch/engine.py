@@ -185,7 +185,8 @@ def build_alert(watch: Watch, result: CheckResult) -> tuple[str, str, str, str]:
 
 
 def handle_result(watch: Watch, result: CheckResult, state: State,
-                  notifier: Notifier, verbose: bool = True) -> None:
+                  notifier: Notifier, verbose: bool = True,
+                  alert_sink=None) -> None:
     stamp = datetime.now().strftime("%H:%M:%S")
     icon = {"open": "🎟", "closed": "⏳", "not_listed": "🔍",
             "no_match": "🙈", "error": "⚠️"}.get(result.status, "•")
@@ -202,4 +203,8 @@ def handle_result(watch: Watch, result: CheckResult, state: State,
     title, body_html, plain, book_url = build_alert(watch, result)
     state.mark_alerted(watch.id, [s.fingerprint for s in result.fresh])
     state.save()
-    notifier.alert(watch.id, title, body_html, plain, book_url)
+    if alert_sink is not None:
+        alert_sink(watch, title, body_html, plain, book_url)
+    else:
+        notifier.alert(watch.id, title, body_html, plain, book_url,
+                       chat_id=watch.chat_id or None)
