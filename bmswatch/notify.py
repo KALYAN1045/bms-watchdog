@@ -32,8 +32,13 @@ class Telegram:
 
     def _call(self, method: str, **payload):
         url = TELEGRAM_API.format(token=self.cfg.bot_token, method=method)
+        # getUpdates holds the connection open for its own `timeout` seconds,
+        # so the HTTP read timeout has to outlast it or every poll dies early.
+        http_timeout = self.timeout
+        if isinstance(payload.get("timeout"), int):
+            http_timeout = max(http_timeout, payload["timeout"] + 10)
         try:
-            res = requests.post(url, json=payload, timeout=self.timeout)
+            res = requests.post(url, json=payload, timeout=http_timeout)
             data = res.json()
         except Exception as exc:
             raise RuntimeError(

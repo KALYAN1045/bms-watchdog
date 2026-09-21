@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -236,6 +237,37 @@ class TestStateAndAlert(unittest.TestCase):
                              snapshot=snap)
         _, html, _, _ = build_alert(w, result)
         self.assertIn("&lt;b&gt;Cinema&lt;/b&gt; &amp; Co", html)
+
+
+class TestTelegram(unittest.TestCase):
+    def _telegram(self):
+        from bmswatch.config import TelegramConfig
+        from bmswatch.notify import Telegram
+        return Telegram(TelegramConfig(bot_token="tok", chat_id="1"), timeout=15)
+
+    def test_http_timeout_outlasts_long_poll(self):
+        """getUpdates holds the socket open; a shorter read timeout kills it."""
+        tg = self._telegram()
+        with mock.patch("bmswatch.notify.requests.post") as post:
+            post.return_value.json.return_value = {"ok": True, "result": []}
+            tg._call("getUpdates", offset=1, timeout=20)
+        self.assertGreater(post.call_args.kwargs["timeout"], 20)
+
+    def test_plain_calls_keep_the_default_timeout(self):
+        tg = self._telegram()
+        with mock.patch("bmswatch.notify.requests.post") as post:
+            post.return_value.json.return_value = {"ok": True, "result": {}}
+            tg._call("getMe")
+        self.assertEqual(post.call_args.kwargs["timeout"], 15)
+
+    def test_network_errors_never_leak_the_token(self):
+        tg = self._telegram()
+        with mock.patch("bmswatch.notify.requests.post",
+                        side_effect=Exception("failed: https://api.telegram.org/bottok/getMe")):
+            with self.assertRaises(RuntimeError) as caught:
+                tg._call("getMe")
+        self.assertNotIn("bottok", str(caught.exception))
+        self.assertIn("<token>", str(caught.exception))
 
 
 if __name__ == "__main__":
