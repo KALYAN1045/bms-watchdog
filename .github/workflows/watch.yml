@@ -6,6 +6,15 @@
 #
 # Cloudflare may also rate a datacenter IP badly regardless of TLS fingerprint.
 # Run the workflow manually once (workflow_dispatch) to find out.
+#
+# MINUTES: public repos get unlimited Actions minutes, so */5 is free there.
+# A PRIVATE repo only gets 2,000 minutes/month on the Free plan, and every run
+# bills a minimum of one minute -- */5 would need ~8,600. In a private repo use
+# "*/30 * * * *" (~1,440/month) or make the repo public. Nothing secret lives
+# in it: the bot token is a GitHub Actions secret, not a file.
+#
+# GitHub also disables scheduled workflows in repos with no commits for 60
+# days. It emails you first; a single commit re-enables them.
 name: watch
 
 on:
@@ -48,5 +57,6 @@ jobs:
             git config user.email "bot@users.noreply.github.com"
             git add state.json
             git commit -m "state: record alerts [skip ci]"
-            git push
+            # another run may have pushed while this one was checking
+            git push || { git pull --rebase --autostash -q && git push; }
           fi
