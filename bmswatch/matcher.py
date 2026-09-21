@@ -58,9 +58,14 @@ def matches(watch: Watch, show: Show) -> bool:
     if watch.require_seats and show.seats_avail < watch.min_seats:
         return False
 
-    if watch.time_from > 0 or watch.time_to < 24 * 60:
+    if watch.windows:
         mins = _minutes(show.time)
-        if mins < 0 or not (watch.time_from <= mins <= watch.time_to):
+        if mins < 0:
+            return False
+        # a window may wrap past midnight (start > end), e.g. 22:00-02:00
+        if not any(start <= mins <= end if start <= end else
+                   (mins >= start or mins <= end)
+                   for start, end in watch.windows):
             return False
 
     return True

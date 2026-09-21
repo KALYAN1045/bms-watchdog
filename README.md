@@ -111,6 +111,17 @@ Which theatres? Tap to select, or choose Any theatre.
 
   ↓  then dates, then:
 
+Which show timings?
+Pick as many as you like.
+[ ▫️ 🌅 Morning    ·  6 AM – 12 PM ]
+[ ▫️ ☀️ Afternoon  ·  12 – 5 PM    ]
+[ ☑️ 🌆 Evening    ·  5 – 9 PM     ]
+[ ☑️ 🌙 Night      ·  9 PM – 12 AM ]
+[ ▫️ 🌃 Late night ·  12 – 6 AM    ]
+[ 🕐 Any time ]  [ ✔ Done (2) ]
+
+  ↓
+
 ✅ Watching The Paradise
 Add as many as you like — /add for another, /list to manage them.
 ```
@@ -120,6 +131,12 @@ nearest match), lists what's actually showing there with real titles, and
 offers the real theatre names pulled live for that film. For a movie whose
 booking hasn't opened, there are no theatres to list yet — it says so and
 watches all of them.
+
+Show timings are the last filter, and they matter more than they look: on a
+big release a single day can carry 200+ shows across the city. Picking
+*Evening + Night* means you're only woken for the ones you'd actually book.
+Late night is its own slot because 1 AM and 4 AM benefit shows are a real
+thing for big Telugu releases — and sometimes the only reason you're watching.
 
 | Command | Does |
 |---|---|
@@ -301,7 +318,8 @@ only the new ones ping you.
 | `languages` | `[Telugu, Hindi]` |
 | `require_seats` | `true` = only alert when seats are actually free (seat sniping) |
 | `min_seats` | Minimum free seats when `require_seats` is on |
-| `time_between` | `["18:00", "23:59"]` — evening shows only |
+| `slots` | `[evening, night]` — any of `morning`, `afternoon`, `evening`, `night`, `latenight`. Empty = any time |
+| `time_between` | `["18:00", "23:59"]` for an exact range instead of a named slot. May wrap past midnight |
 | `enabled` | `false` parks a watch without deleting it |
 
 Global `defaults:` take `poll_seconds` (minimum 20), `jitter_seconds`,

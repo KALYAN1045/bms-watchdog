@@ -38,6 +38,8 @@ watches:
       - AMB Cinemas
     languages: [Telugu]
     formats: []                  # e.g. [IMAX, EPIQ, PCX, 4DX, DOLBY] — empty = any
+    slots: [evening, night]      # morning | afternoon | evening | night | latenight
+                                 # omit for any time of day
     require_seats: false         # true = only shout when seats are actually free
     min_seats: 2
     enabled: true
@@ -57,7 +59,7 @@ watches:
     movie: The Paradise
     event_code: ET00436621
     theatres: [Prasads]
-    time_between: ["18:00", "23:59"]
+    time_between: ["18:00", "23:59"]   # exact range, instead of named slots
     require_seats: true
     min_seats: 3
     enabled: false

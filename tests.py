@@ -141,10 +141,43 @@ class TestMatching(unittest.TestCase):
         got = filter_shows(watch(require_seats=True, min_seats=100), self.shows)
         self.assertEqual([s.time for s in got], ["09:30 AM"])
 
-    def test_time_window(self):
-        w = watch(time_from=17 * 60, time_to=23 * 60 + 59)
+    def test_explicit_time_window(self):
+        w = watch(windows=[(17 * 60, 23 * 60 + 59)])
         self.assertEqual(sorted(s.time for s in filter_shows(w, self.shows)),
                          ["06:00 PM", "10:50 PM"])
+
+    def test_named_slots_select_the_right_shows(self):
+        from bmswatch.config import TIME_SLOTS
+
+        def slot(*names):
+            return watch(slots=list(names),
+                         windows=[(TIME_SLOTS[n]["from"], TIME_SLOTS[n]["to"])
+                                  for n in names])
+
+        # shows are 09:30 AM (morning), 06:00 PM (evening), 10:50 PM (night)
+        self.assertEqual([s.time for s in filter_shows(slot("morning"), self.shows)],
+                         ["09:30 AM"])
+        self.assertEqual([s.time for s in filter_shows(slot("evening"), self.shows)],
+                         ["06:00 PM"])
+        self.assertEqual([s.time for s in filter_shows(slot("night"), self.shows)],
+                         ["10:50 PM"])
+        self.assertEqual([s.time for s in filter_shows(slot("afternoon"), self.shows)],
+                         [])
+
+    def test_multiple_slots_are_a_union(self):
+        from bmswatch.config import TIME_SLOTS
+        names = ["morning", "night"]
+        w = watch(slots=names, windows=[(TIME_SLOTS[n]["from"], TIME_SLOTS[n]["to"])
+                                        for n in names])
+        self.assertEqual(sorted(s.time for s in filter_shows(w, self.shows)),
+                         ["09:30 AM", "10:50 PM"])
+
+    def test_window_may_wrap_past_midnight(self):
+        w = watch(windows=[(22 * 60, 2 * 60)])       # 10 PM – 2 AM
+        self.assertEqual([s.time for s in filter_shows(w, self.shows)], ["10:50 PM"])
+
+    def test_no_slots_means_any_time(self):
+        self.assertEqual(len(filter_shows(watch(), self.shows)), 3)
 
     def test_empty_filters_match_everything(self):
         self.assertEqual(len(filter_shows(watch(), self.shows)), 3)
@@ -157,6 +190,31 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(configmod._date_code("20260925"), "20260925")
         with self.assertRaises(configmod.ConfigError):
             configmod._date_code("next friday")
+
+    def test_slots_become_windows(self):
+        from bmswatch.config import TIME_SLOTS
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "w.yaml"
+            path.write_text("watches:\n  - movie: M\n    event_code: E1\n"
+                            "    slots: [evening, Night]\n")
+            w = configmod.load(path).watches[0]
+        self.assertEqual(w.slots, ["evening", "night"])       # normalised
+        self.assertEqual(w.windows, [
+            (TIME_SLOTS["evening"]["from"], TIME_SLOTS["evening"]["to"]),
+            (TIME_SLOTS["night"]["from"], TIME_SLOTS["night"]["to"])])
+
+    def test_unknown_slot_is_rejected_with_the_valid_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "w.yaml"
+            path.write_text("watches:\n  - movie: M\n    event_code: E1\n"
+                            "    slots: [teatime]\n")
+            with self.assertRaises(configmod.ConfigError) as caught:
+                configmod.load(path)
+        self.assertIn("morning", str(caught.exception))
+
+    def test_describe_slots(self):
+        self.assertEqual(configmod.describe_slots([]), "Any time")
+        self.assertIn("Evening", configmod.describe_slots(["evening"]))
 
     def test_env_expansion_and_defaults(self):
         import os
@@ -176,7 +234,7 @@ class TestConfig(unittest.TestCase):
         w = cfg.watches[0]
         self.assertEqual(w.id, "the-paradise")       # auto-generated
         self.assertEqual(w.dates, ["20260925"])
-        self.assertEqual((w.time_from, w.time_to), (18 * 60, 23 * 60))
+        self.assertEqual(w.windows, [(18 * 60, 23 * 60)])
 
     def test_rejects_hammering_and_duplicate_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -511,7 +569,14 @@ class TestBotFlow(unittest.TestCase):
         self.click(self.tg.press("Done"))
         self.assertIn("Which dates", self.tg.last_text())
         self.click(self.tg.press("Any date"))
+
+        # the timings step
+        self.assertIn("Which show timings", self.tg.last_text())
+        self.click(self.tg.press("Evening"))
+        self.click(self.tg.press("Night"))
+        self.click(self.tg.press("Done"))
         self.assertIn("Create this alert", self.tg.last_text())
+        self.assertIn("Evening", self.tg.last_text())
         self.click("ok")
 
         watches = self.store.watches(self.chat)
@@ -521,6 +586,7 @@ class TestBotFlow(unittest.TestCase):
         self.assertEqual(w["region_code"], "HYD")
         self.assertEqual(w["theatres"], ["AMB Cinemas: Gachibowli"])
         self.assertEqual(w["dates"], [])
+        self.assertEqual(w["slots"], ["evening", "night"])
         self.assertTrue(self.changes, "the runner should be told to reload")
 
     def test_multiple_alerts_and_removal(self):
@@ -531,6 +597,7 @@ class TestBotFlow(unittest.TestCase):
             self.click(self.tg.press(movie))
             self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press("Any date"))
+            self.click(self.tg.press("Any time"))
             self.click("ok")
         self.assertEqual(len(self.store.watches(self.chat)), 2)
 
@@ -548,9 +615,38 @@ class TestBotFlow(unittest.TestCase):
             self.click(self.tg.press("Paradise"))
             self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press("Any date"))
+            self.click(self.tg.press("Any time"))
             self.click("ok")
         self.assertEqual(len(self.store.watches(self.chat)), 1)
         self.assertIn("already have an identical", self.tg.last_text())
+
+    def test_same_movie_different_timings_is_not_a_duplicate(self):
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        for slot in ("Morning", "Night"):
+            self.text("/add")
+            self.click(self.tg.press("Paradise"))
+            self.click(self.tg.press("Any theatre"))
+            self.click(self.tg.press("Any date"))
+            self.click(self.tg.press(slot))
+            self.click(self.tg.press("Done"))
+            self.click("ok")
+        saved = self.store.watches(self.chat)
+        self.assertEqual(len(saved), 2)
+        self.assertEqual(sorted(w["slots"][0] for w in saved), ["morning", "night"])
+
+    def test_list_shows_the_chosen_timings(self):
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        self.text("/add")
+        self.click(self.tg.press("Paradise"))
+        self.click(self.tg.press("Any theatre"))
+        self.click(self.tg.press("Any date"))
+        self.click(self.tg.press("Evening"))
+        self.click(self.tg.press("Done"))
+        self.click("ok")
+        self.text("/list")
+        self.assertIn("Evening", self.tg.last_text())
 
     def test_ack_button_is_recorded_for_the_scheduler(self):
         self.click("ack:some-watch")

@@ -8,11 +8,39 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
 _ENV_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+# Show-time slots people actually think in. Late night is its own slot rather
+# than wrapping past midnight, because 1 AM and 4 AM benefit shows are a real
+# thing for big Telugu releases and you may want only those.
+TIME_SLOTS: Dict[str, Dict[str, Any]] = {
+    "morning":   {"from": 6 * 60,  "to": 11 * 60 + 59, "icon": "🌅",
+                  "label": "Morning",    "when": "6 AM – 12 PM"},
+    "afternoon": {"from": 12 * 60, "to": 16 * 60 + 59, "icon": "☀️",
+                  "label": "Afternoon",  "when": "12 – 5 PM"},
+    "evening":   {"from": 17 * 60, "to": 20 * 60 + 59, "icon": "🌆",
+                  "label": "Evening",    "when": "5 – 9 PM"},
+    "night":     {"from": 21 * 60, "to": 23 * 60 + 59, "icon": "🌙",
+                  "label": "Night",      "when": "9 PM – 12 AM"},
+    "latenight": {"from": 0,       "to": 5 * 60 + 59,  "icon": "🌃",
+                  "label": "Late night", "when": "12 – 6 AM"},
+}
+SLOT_ORDER = ["morning", "afternoon", "evening", "night", "latenight"]
+
+
+def slot_label(name: str) -> str:
+    slot = TIME_SLOTS.get(name)
+    return f"{slot['icon']} {slot['label']}" if slot else name
+
+
+def describe_slots(names: List[str]) -> str:
+    if not names:
+        return "Any time"
+    return ", ".join(slot_label(n) for n in names if n in TIME_SLOTS) or "Any time"
 
 
 class ConfigError(ValueError):
@@ -74,8 +102,8 @@ class Watch:
     languages: List[str] = field(default_factory=list)
     require_seats: bool = False
     min_seats: int = 1
-    time_from: int = 0
-    time_to: int = 24 * 60
+    slots: List[str] = field(default_factory=list)          # named time slots
+    windows: List[Tuple[int, int]] = field(default_factory=list)  # minutes, inclusive
     enabled: bool = True
     chat_id: str = ""            # set for watches created from Telegram
 
@@ -162,12 +190,27 @@ def _build_watch(raw: Dict[str, Any], defaults: Dict[str, Any], index: int) -> W
         today = date.today()
         dates = [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(int(next_days))]
 
+    # named slots (from the bot) and/or an explicit range (hand-written YAML)
+    raw_slots = merged.get("slots") or merged.get("time_slots") or []
+    if isinstance(raw_slots, str):
+        raw_slots = [raw_slots]
+    slots: List[str] = []
+    windows: List[Tuple[int, int]] = []
+    for name in raw_slots:
+        key = str(name).strip().lower().replace(" ", "").replace("-", "")
+        if key not in TIME_SLOTS:
+            raise ConfigError(
+                f"watch '{movie}': unknown time slot {name!r}. "
+                f"Use any of: {', '.join(SLOT_ORDER)}")
+        if key not in slots:
+            slots.append(key)
+            windows.append((TIME_SLOTS[key]["from"], TIME_SLOTS[key]["to"]))
+
     window = merged.get("time_between") or merged.get("time_window")
-    time_from, time_to = 0, 24 * 60
     if window:
         if not isinstance(window, (list, tuple)) or len(window) != 2:
             raise ConfigError(f"watch '{movie}': time_between must be [start, end]")
-        time_from, time_to = _minutes(window[0]), _minutes(window[1])
+        windows.append((_minutes(window[0]), _minutes(window[1])))
 
     def as_list(key: str) -> List[str]:
         value = merged.get(key) or []
@@ -190,8 +233,8 @@ def _build_watch(raw: Dict[str, Any], defaults: Dict[str, Any], index: int) -> W
         languages=as_list("languages"),
         require_seats=bool(merged.get("require_seats", False)),
         min_seats=int(merged.get("min_seats", 1)),
-        time_from=time_from,
-        time_to=time_to,
+        slots=slots,
+        windows=windows,
         enabled=bool(merged.get("enabled", True)),
         chat_id=str(merged.get("chat_id") or ""),
     )
