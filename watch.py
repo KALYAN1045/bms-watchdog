@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore", message=".*OpenSSL.*")
 from bmswatch import config as configmod
 from bmswatch.bms import parse_showtimes
 from bmswatch.engine import check_watch, handle_result
-from bmswatch.fetcher import BMSSession, FetchError
+from bmswatch.fetcher import FetchError, make_session
 from bmswatch.notify import Notifier
 from bmswatch.state import State
 
@@ -82,9 +82,9 @@ class SessionPool:
         self._sessions.clear()
 
 
-def _session(settings: configmod.Settings, city: str, region: str,
-             verbose: bool) -> BMSSession:
-    return BMSSession(
+def _session(settings: configmod.Settings, city: str, region: str, verbose: bool):
+    return make_session(
+        engine=settings.engine,
         city=city,
         region_code=region,
         profile_dir=ROOT / settings.profile_dir,
@@ -95,11 +95,21 @@ def _session(settings: configmod.Settings, city: str, region: str,
     )
 
 
+def _standalone_session(args):
+    """For the lookup commands, which don't read a watchlist."""
+    return make_session(
+        engine=os.environ.get("BMS_ENGINE", "auto"),
+        city=args.city,
+        region_code=args.region,
+        profile_dir=ROOT / ".chrome-profile",
+        verbose=args.verbose,
+    )
+
+
 # -- commands --------------------------------------------------------------
 
 def cmd_movies(args) -> int:
-    with BMSSession(city=args.city, region_code=args.region,
-                    profile_dir=ROOT / ".chrome-profile", verbose=args.verbose) as s:
+    with _standalone_session(args) as s:
         movies = s.list_movies()
     query = (args.query or "").lower().replace(" ", "-")
     rows = sorted((slug, code) for code, slug in movies.items()
@@ -118,8 +128,7 @@ def cmd_movies(args) -> int:
 def cmd_theatres(args) -> int:
     date_code = args.date or datetime.now().strftime("%Y%m%d")
     date_code = configmod.date_code(date_code)
-    with BMSSession(city=args.city, region_code=args.region,
-                    profile_dir=ROOT / ".chrome-profile", verbose=args.verbose) as s:
+    with _standalone_session(args) as s:
         snap = parse_showtimes(s.showtimes(args.event, date_code), args.event, date_code)
         if not snap.shows and snap.open_dates:
             date_code = snap.open_dates[0]
@@ -306,7 +315,10 @@ def cmd_doctor(args) -> int:
     try:
         with _session(settings, watch.city, watch.region_code, args.verbose) as s:
             movies = s.list_movies()
-            print(f"   ok — browser session live, {len(movies)} movies listed in {watch.city}")
+            how = {"http": "plain HTTP (no browser needed)",
+                   "browser": "headful browser"}.get(s.name, s.name)
+            print(f"   ok — reaching BookMyShow via {how}")
+            print(f"   ok — {len(movies)} movies listed in {watch.city}")
             state = State(ROOT / settings.state_file)
             result = check_watch(s, watch, state)
             print(f"   ok — '{watch.id}': {result.summary}")
@@ -316,7 +328,8 @@ def cmd_doctor(args) -> int:
     except Exception as exc:
         ok = False
         print(f"   FAIL — {exc}")
-        print("   hint: install Google Chrome, and run  python -m playwright install chromium")
+        print("   hint: check your internet connection. If it says Cloudflare "
+              "blocked you, set  engine: browser  in watchlist.yaml defaults.")
 
     print("\n" + ("All good. Start it with:  python watch.py run" if ok
                   else "Fix the FAILs above, then re-run doctor."))

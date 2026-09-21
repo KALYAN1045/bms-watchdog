@@ -4,50 +4,48 @@ Pings your phone the moment BookMyShow opens tickets for a movie at the
 theatres you care about — and keeps pinging until you tap **✅ Got it**.
 
 ```
-BookMyShow  →  Chromium (headful, on a virtual display)  →  showtimes API  →  filter
-                                                                                ↓
-                                   Telegram  ←  🚨 TICKETS OPEN · Prasads · 8:00 AM
-                                   (repeats until you acknowledge)
+BookMyShow  →  showtimes API  →  filter by theatre / date / format / seats
+                                              ↓
+                      Telegram  ←  🚨 TICKETS OPEN · Prasads · 8:00 AM · PCX
+                      (repeats until you acknowledge)
 ```
 
-Runs on a small Linux server so your laptop can stay shut. Everything it uses
-is free or nearly free: Python, a Telegram bot, Chromium. No ScraperAPI, no
-paid scraping proxy, no BookMyShow account.
+It is a small Python process — no browser, ~40 ms and a few MB per check — so
+it runs anywhere that stays on: a free VPS tier, a Raspberry Pi, or an Android
+phone in your pocket. Free to build and free to run.
 
 ---
 
-## Read this first: the one constraint that shapes everything
+## How it gets past Cloudflare
 
-BookMyShow sits behind Cloudflare. I tested this against the live site before
-writing the code:
+BookMyShow is behind Cloudflare, and the obvious approaches fail. I tested
+each against the live site rather than guessing, and the result was not what
+the usual advice online says:
 
-| How you ask | Result |
+| Client | Result |
 |---|---|
-| `curl` / Python `requests` | **403**, every time |
-| Playwright **headless** — Firefox, Chromium, Chrome headless shell | **403**, every time |
-| Playwright **headful** — real Chrome | **200 ✅** |
-| Playwright **headful** — bundled Chromium | **200 ✅** (was blocked on one earlier attempt) |
+| `curl` / Python `requests`, from a residential Indian IP | 403 |
+| Playwright **headless** — Firefox, Chromium, Chrome headless shell | 403 |
+| Playwright **headful** — real Chrome, bundled Chromium | 200 ✅ |
+| **Plain HTTP with a Chrome TLS fingerprint** (`curl_cffi`) | **200 ✅** |
+| Same library with impersonation switched off | 403 |
 
-**Headful is the hard requirement.** Not the specific browser — the fact that
-it isn't headless. Servers have no display, so the Docker image gives Chromium
-a virtual one with Xvfb. That is the whole trick.
+That last pair is the whole story. Cloudflare is fingerprinting the **TLS
+handshake** — not cookies, not headers, not JavaScript. No challenge is ever
+issued and no clearance cookie is needed. A client whose handshake looks like
+Chrome's is simply served, and one that doesn't is refused.
 
-Once a session is warm, each poll is a single ~20 KB JSON call to BookMyShow's
-own mobile API from inside that page, which is why checking every 60 seconds
-is cheap and unobtrusive.
+So the watchdog sends an ordinary HTTPS request that happens to negotiate TLS
+exactly the way Chrome does, then calls BookMyShow's own mobile showtimes API
+— the same endpoint their Android app uses. That's it.
 
-**One thing I could not test from here: your server's IP.** Cloudflare scores
-IP reputation separately from browser fingerprint, and datacenter ranges score
-worse than home broadband. `python watch.py doctor` answers this on your server
-in about 30 seconds — run it before trusting the setup. If that host is
-blocked, the fixes are in [Troubleshooting](#troubleshooting).
+A headful-browser fallback is still included (`engine: browser`) in case that
+ever stops working, but it is not the normal path and you will probably never
+need it.
 
 ---
 
-## 1. Configure it locally (10 minutes)
-
-Do this on your Mac first — it is much easier to pick theatres and test alerts
-with a terminal in front of you. Then ship the same folder to the server.
+## 1. Configure it (10 minutes)
 
 ```bash
 cd bms-watchdog
@@ -55,29 +53,25 @@ python3 -m venv venv
 ./venv/bin/pip install -r requirements.txt
 ```
 
-On your Mac it drives your installed Chrome with a **separate throwaway
-profile** in `.chrome-profile/` — it never touches your real browser, logins,
-or tabs.
-
 ### Make a Telegram bot
 
 1. In Telegram, message **@BotFather** → `/newbot` → pick a name (the username
    must end in `bot`). It replies with a token like `8012345678:AAE...`.
-2. Paste that token into `.env` in this folder:
+2. Paste that token into `.env`:
 
    ```
    TELEGRAM_BOT_TOKEN=8012345678:AAE...
    ```
 
-3. Let the setup command do the rest:
+3. Run the setup command:
 
    ```bash
    ./venv/bin/python watch.py telegram-setup
    ```
 
    It validates the token, waits for you to press **Start** in Telegram,
-   discovers your chat id, writes it to `.env`, and sends a confirmation
-   message. Your token is never printed — not even inside error messages.
+   discovers your chat id, writes it to `.env`, and sends a confirmation.
+   Your token is never printed — not even inside error messages.
 
 ### Find your movie and your theatres
 
@@ -127,64 +121,81 @@ source .env
 
 ---
 
-## 2. Put it on a server
+## 2. Run it somewhere that stays on
 
-Any Linux box with **2 GB RAM** and Docker. Chromium is the heavy part; 1 GB
-works but leaves no headroom.
+Because there's no browser, the footprint is tiny — roughly 40 MB of RAM and a
+fraction of a CPU. Anything works.
 
-Good options, cheapest first:
+### Your Android phone, via Termux
 
-| Host | Cost | Notes |
-|---|---|---|
-| **Oracle Cloud Always Free** | ₹0 forever | 4 ARM cores / 24 GB. The image builds on arm64 |
-| **Hetzner CX22** | ~₹350/mo | Simple, fast, x86 |
-| **DigitalOcean / Vultr** | ~₹500/mo | Same idea |
-| **A Raspberry Pi at home** | ₹0 if you own one | Best IP reputation — it's residential |
+Genuinely viable now, and free. One wrinkle: `curl_cffi` ships Linux (glibc)
+wheels, and Termux is Android/bionic — so install inside a Debian container,
+which `proot-distro` makes a one-liner. No root needed.
 
 ```bash
-# on the server
-sudo apt update && sudo apt install -y docker.io docker-compose-v2 git
-git clone <your-repo> bms-watchdog && cd bms-watchdog
-
-# copy over the watchlist.yaml and .env you just tested — unchanged.
-# The image sets BMS_CHANNEL=chromium, BMS_WINDOW=visible and BMS_DESKTOP=0
-# for you, so the same file works on both machines.
-
-docker compose build
-docker compose run --rm watchdog python watch.py doctor   # ← the IP test
-docker compose up -d
+# in Termux
+pkg update -y && pkg install -y proot-distro
+proot-distro install debian
+proot-distro login debian
+```
+```bash
+# now inside Debian
+apt update && apt install -y python3 python3-venv git
+git clone <your-repo> ~/bms-watchdog && cd ~/bms-watchdog
+python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+# copy your .env and watchlist.yaml across, then:
+./venv/bin/python watch.py doctor
+nohup ./venv/bin/python watch.py run >> watchdog.log 2>&1 &
 ```
 
-`doctor` is the moment of truth. If it prints `ok — browser session live`,
-you're done. If it prints `Cloudflare blocked the session`, that host's IP is
-the problem — see [Troubleshooting](#troubleshooting).
+Three things Android will otherwise do to you:
+
+* **Doze will suspend it.** Install Termux:API (`pkg install termux-api`) and
+  run `termux-wake-lock` before starting.
+* **Battery optimisation will kill it.** Android Settings → Apps → Termux →
+  Battery → *Unrestricted*.
+* **A reboot ends it.** Install the **Termux:Boot** addon and put a startup
+  script in `~/.termux/boot/`.
+
+Keep the phone charging — a poll every 60 s is light, but 24/7 wakelock isn't
+free. An old spare phone plugged in on a shelf is the ideal version of this.
+
+I could not test the Termux path from your Mac, so treat these steps as
+carefully-researched rather than verified — `watch.py doctor` will confirm it
+in one command on the phone.
+
+### A VPS or Raspberry Pi
 
 ```bash
-docker compose logs -f          # watch it work
-docker compose restart          # after editing watchlist.yaml
-docker compose down             # stop
+bash scripts/deploy.sh user@your-server
 ```
 
-It restarts on crash and on server reboot (`restart: unless-stopped`), and
-`state.json` lives on the host so a restart never re-sends old alerts.
+Syncs the folder, builds the image, runs `doctor` as a gate, and starts it
+detached. The image is now plain `python:3.12-slim`. A Pi at home is the
+lowest-risk option because it's a residential IP; Oracle Cloud's Always Free
+tier is the ₹0 cloud option and the image builds on its ARM instances.
 
-### Or keep it on the Mac
+Or without Docker at all — it's just a Python process:
+
+```bash
+./venv/bin/python watch.py run
+```
+
+### Your Mac
 
 ```bash
 bash scripts/install-launchd.sh
 ```
 
-Starts at login, restarts if it crashes, logs to `logs/watchdog.log`. Chrome
-runs minimised and invisible. Stop it with
+Starts at login, restarts on crash, logs to `logs/watchdog.log`. Only runs
+while the Mac is awake — closing the lid stops it. Undo with
 `launchctl unload ~/Library/LaunchAgents/com.bmswatch.watchdog.plist`.
 
-### What about GitHub Actions?
+### GitHub Actions
 
-`.github/workflows/watch.yml` is included, but be clear-eyed about it: GitHub's
-cron has a 5-minute floor and is routinely 5–20 minutes late, and its runners
-are datacenter IPs. It is a backstop, not a way to win a first-day-first-show
-scramble. Add `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` as repository secrets
-and commit your `watchlist.yaml`.
+`.github/workflows/watch.yml` runs a check on a schedule for free. The catch
+is timing, not access: GitHub's cron has a 5-minute floor and is routinely
+5–20 minutes late. A backstop, not a way to win a first-day scramble.
 
 ---
 
@@ -204,16 +215,8 @@ and commit your `watchlist.yaml`.
 ```
 
 It repeats every 30 s, up to 8 times, until you tap **✅ Got it** (or reply
-`ok`). Tune `repeat_count` / `repeat_every_seconds`. Each distinct show alerts
-only once, ever — when more shows open later, only the new ones ping you.
-
-Typical log output:
-
-```
-19:23:15 ⏳ The Paradise: listed, booking not open yet
-19:24:15 ⏳ The Paradise: listed, booking not open yet
-19:25:16 🎟 The Paradise: 12 matching shows (12 new)
-```
+`ok`). Each distinct show alerts only once, ever — when more shows open later,
+only the new ones ping you.
 
 ---
 
@@ -237,12 +240,11 @@ Typical log output:
 | `enabled` | `false` parks a watch without deleting it |
 
 Global `defaults:` take `poll_seconds` (minimum 20), `jitter_seconds`,
-`heartbeat_minutes` (periodic "still alive" ping), `city`, `region_code`,
-`channel`, `window`, and `proxy`.
+`heartbeat_minutes`, `city`, `region_code`, `engine`, `proxy`, and the
+browser-fallback options `channel` and `window`.
 
-The last four can be overridden per-machine with environment variables, which
-is how one watchlist serves both your Mac and the container:
-`BMS_CHANNEL`, `BMS_WINDOW`, `BMS_PROXY`, and `BMS_DESKTOP=0` to mute desktop
+Environment overrides, so one watchlist serves every machine: `BMS_ENGINE`,
+`BMS_PROXY`, `BMS_CHANNEL`, `BMS_WINDOW`, and `BMS_DESKTOP=0` to mute desktop
 banners.
 
 Watching a film that isn't on BookMyShow yet? Leave out `event_code`. The
@@ -255,17 +257,15 @@ watchdog scans the now-showing *and* upcoming pages each cycle, picks up the
 
 | Symptom | Fix |
 |---|---|
-| `Cloudflare blocked the session` **on a server** | Confirm Chromium is headful — the container must run under `xvfb-run`, never `--headless`. If it still fails, it's the IP: try a different provider, move to a Pi at home, or set `proxy:` in `defaults:` |
-| `Cloudflare blocked the session` **on the Mac** | Quit Cloudflare WARP / ProtonVPN and retry |
-| Container exits immediately | `docker compose logs`. Usually a YAML error in `watchlist.yaml` — `doctor` names the line |
-| Chromium crashes in Docker | Keep `shm_size: "1gb"` in `docker-compose.yml` |
-| Telegram says nothing | You must message the bot first. Re-run `doctor` |
-| `no channel configured` | The container isn't seeing `.env` — check `env_file: .env` and that `.env` exists on the server |
-| Status stays `🙈 none match your filters` | Filters are too strict. Run `watch.py theatres -e ET…` and copy names exactly |
-| Status stays `🔍 not listed` | The movie has no BookMyShow page in this city yet. That's the correct answer — it will flip on its own |
+| Everything 403s | Your IP may be rated badly. Try another host, or set `proxy:`. As a last resort set `engine: browser` (needs Playwright + a headful browser) |
+| `curl_cffi is not installed` | `pip install -r requirements.txt`. On Termux, use the `proot-distro` route above — native Termux has no wheel for it |
+| Telegram says nothing | You must message the bot first. Re-run `watch.py telegram-setup` |
+| `no channel configured` | `source .env` first, or check `env_file: .env` in Docker |
+| Status stays `🙈 none match your filters` | Filters too strict. Run `watch.py theatres -e ET…` and copy names exactly |
+| Status stays `🔍 not listed` | No BookMyShow page in this city yet. That's the correct answer — it will flip on its own |
 | Want to re-test alerts | `rm state.json` clears the "already alerted" memory |
 
-Add `-v` to any command for browser-level detail.
+Add `-v` to any command for transport-level detail.
 
 ---
 
@@ -275,11 +275,12 @@ Add `-v` to any command for browser-level detail.
 ./venv/bin/python tests.py
 ```
 
-20 tests, no network. They cover parsing a real API payload, whole-word theatre
+No network needed. They cover parsing a real API payload, whole-word theatre
 matching, sold-out detection, the substitute-date trap (BookMyShow answers a
 date that has no shows by returning the *next* date that does — the parser
-rejects that, or you'd get alerted for the wrong day), config validation,
-de-duplication across restarts, and HTML escaping.
+rejects that, or you'd be alerted for the wrong day), config validation,
+de-duplication across restarts, HTML escaping, and the Telegram client's
+timeout and token-redaction behaviour.
 
 ---
 
