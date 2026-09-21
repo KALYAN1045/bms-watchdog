@@ -1,0 +1,4 @@
+# Drives real Google Chrome; no browser download needed if Chrome is installed.
+playwright>=1.45
+PyYAML>=6.0
+requests>=2.31

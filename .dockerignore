@@ -1,0 +1,6 @@
+venv/
+logs/
+.chrome-profile/
+__pycache__/
+*.pyc
+.git/

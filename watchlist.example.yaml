@@ -1,0 +1,61 @@
+# ---------------------------------------------------------------------------
+# bms-watchdog — what to watch, and how loudly to shout.
+# Copy to watchlist.yaml and edit. ${VARS} are read from the environment.
+# ---------------------------------------------------------------------------
+
+defaults:
+  city: hyderabad          # the slug BookMyShow uses in its URLs
+  region_code: HYD
+  poll_seconds: 60         # how often to check (minimum 20 — be polite)
+  jitter_seconds: 10       # random extra wait, so requests aren't clockwork
+  heartbeat_minutes: 0     # e.g. 180 = "still alive" ping every 3h; 0 = off
+  # Browser. It MUST run headful — headless is blocked by Cloudflare every time.
+  channel: chrome          # real Chrome on a laptop; the Docker image overrides
+  window: minimized        # this and `window` with BMS_CHANNEL / BMS_WINDOW
+  # proxy: http://user:pass@host:port   # only if your host's IP gets blocked
+
+telegram:
+  bot_token: ${TELEGRAM_BOT_TOKEN}
+  chat_id: ${TELEGRAM_CHAT_ID}
+  repeat_count: 8          # keep pinging this many times...
+  repeat_every_seconds: 30 # ...this far apart, until you tap "✅ Got it"
+
+desktop:
+  enabled: true            # macOS banner + sound alongside Telegram; false on a server
+  sound: Sosumi
+
+watches:
+  # 1. The common case: a specific movie, specific theatres, specific date.
+  - id: paradise-prasads
+    movie: The Paradise
+    event_code: ET00436621       # find it with:  python watch.py movies -q paradise
+    dates: [2026-09-25]          # omit entirely to watch every bookable date
+    theatres:                    # substring match, case-insensitive
+      - Prasads
+      - AAA Cinemas
+      - AMB Cinemas
+    languages: [Telugu]
+    formats: []                  # e.g. [IMAX, EPIQ, PCX, 4DX, DOLBY] — empty = any
+    require_seats: false         # true = only shout when seats are actually free
+    min_seats: 2
+    enabled: true
+
+  # 2. A film that isn't on BookMyShow yet: no event_code, just a name.
+  #    The watchdog finds the ET-code itself once the page appears.
+  - id: unreleased-imax
+    movie: Avengers Endgame Encore
+    search: avengers-endgame-encore
+    theatres: [Prasads, AMB]
+    formats: [IMAX, EPIQ]
+    next_days: 7                 # watch the next 7 days once booking opens
+    enabled: false
+
+  # 3. Seat sniper: shows you already know about, alert when seats free up.
+  - id: sold-out-watch
+    movie: The Paradise
+    event_code: ET00436621
+    theatres: [Prasads]
+    time_between: ["18:00", "23:59"]
+    require_seats: true
+    min_seats: 3
+    enabled: false

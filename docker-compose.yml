@@ -1,0 +1,11 @@
+services:
+  watchdog:
+    build: .
+    image: bms-watchdog
+    restart: unless-stopped
+    env_file: .env
+    shm_size: "1gb"          # Chromium crashes on Docker's default 64 MB
+    volumes:
+      - .:/app               # watchlist.yaml, state.json and the Chrome profile
+                             # live on the host, so they survive rebuilds
+    stop_grace_period: 30s
