@@ -472,7 +472,11 @@ def cmd_bot(args) -> int:
 
     last_check = 0.0
     while not _stop:
-        bot.poll(timeout=5)
+        try:
+            bot.poll(timeout=5)
+        except Exception as exc:
+            print(f"{datetime.now():%H:%M:%S} ⚠️  bot poll failed: {exc}", flush=True)
+            time.sleep(2)
 
         # anything the user acknowledged stops repeating immediately
         if bot.acked:
@@ -483,9 +487,13 @@ def cmd_bot(args) -> int:
         for alert in pending:
             if now >= alert.next_at:
                 alert.sent += 1
-                notifier.alert_once(alert.watch_id, alert.title, alert.body,
-                                    alert.plain, alert.url, round_no=alert.sent,
-                                    rounds=alert.rounds, chat_id=alert.chat_id)
+                try:
+                    notifier.alert_once(alert.watch_id, alert.title, alert.body,
+                                        alert.plain, alert.url, round_no=alert.sent,
+                                        rounds=alert.rounds, chat_id=alert.chat_id)
+                except Exception as exc:      # never let one alert kill the loop
+                    print(f"{datetime.now():%H:%M:%S} ⚠️  alert "
+                          f"'{alert.watch_id}' failed: {exc}", flush=True)
                 alert.next_at = now + settings.telegram.repeat_every_seconds
             if alert.sent < alert.rounds:
                 still.append(alert)

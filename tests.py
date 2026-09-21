@@ -323,6 +323,107 @@ class TestFetcher(unittest.TestCase):
         self.assertIsInstance(s, HTTPSession)
 
 
+class TestNotifier(unittest.TestCase):
+    """The bot loop calls these directly; a missing one only shows up when a
+    real alert fires, which is the worst possible time to find out."""
+
+    def _notifier(self, telegram=None):
+        from bmswatch.config import DesktopConfig, TelegramConfig
+        from bmswatch.notify import Notifier
+        n = Notifier(TelegramConfig(bot_token="t", chat_id="1", repeat_count=3,
+                                    repeat_every_seconds=1),
+                     DesktopConfig(enabled=False))
+        n.telegram = telegram if telegram is not None else FakeTelegram()
+        return n
+
+    def test_alert_once_signature_matches_how_the_bot_calls_it(self):
+        import inspect
+        from bmswatch.notify import Notifier
+        sig = inspect.signature(Notifier.alert_once)
+        sig.bind(None, "wid", "title", "<b>body</b>", "plain", "https://x/",
+                 round_no=2, rounds=8, chat_id="42")
+
+    def test_alert_signature_accepts_chat_id(self):
+        import inspect
+        from bmswatch.notify import Notifier
+        inspect.signature(Notifier.alert).bind(
+            None, "wid", "title", "body", "plain", "https://x/", chat_id="42")
+
+    def test_alert_once_sends_to_the_right_chat_with_buttons(self):
+        tg = FakeTelegram()
+        self._notifier(tg).alert_once("wid", "T", "<b>body</b>", "plain",
+                                      "https://book/", chat_id="4242")
+        self.assertEqual(len(tg.sent), 1)
+        msg = tg.sent[0]
+        self.assertEqual(msg["chat_id"], "4242")
+        labels = [b["text"] for row in msg["keyboard"] for b in row]
+        self.assertTrue(any("Book now" in l for l in labels))
+        self.assertTrue(any("Got it" in l for l in labels))
+        data = [b.get("callback_data") for row in msg["keyboard"] for b in row]
+        self.assertIn("ack:wid", data)
+
+    def test_later_rounds_are_marked_as_reminders(self):
+        tg = FakeTelegram()
+        n = self._notifier(tg)
+        n.alert_once("wid", "T", "body", "plain", "u", round_no=1, rounds=8)
+        n.alert_once("wid", "T", "body", "plain", "u", round_no=3, rounds=8)
+        self.assertNotIn("Reminder", tg.sent[0]["text"])
+        self.assertIn("Reminder 3/8", tg.sent[1]["text"])
+
+    def test_alert_repeats_then_stops(self):
+        tg = FakeTelegram()
+        n = self._notifier(tg)
+        n.repeat_every = 5
+        with mock.patch.object(n, "_no_channel", return_value=False), \
+             mock.patch("bmswatch.notify.time.sleep"):
+            tg.check_ack = lambda wid: False
+            tg.drain = lambda: None
+            n.alert("wid", "T", "body", "plain", "u")
+        self.assertEqual(len(tg.sent), 3)          # repeat_count
+
+    def test_alert_stops_early_once_acknowledged(self):
+        tg = FakeTelegram()
+        n = self._notifier(tg)
+        n.repeat_every = 5
+        tg.drain = lambda: None
+        tg.check_ack = lambda wid: True
+        with mock.patch("bmswatch.notify.time.sleep"):
+            n.alert("wid", "T", "body", "plain", "u")
+        self.assertEqual(len(tg.sent), 2)          # first ping, then the "stopped" note
+
+    def test_engine_delivers_through_the_notifier_without_a_sink(self):
+        """handle_result's default path must match the Notifier's signature."""
+        from bmswatch.engine import CheckResult, handle_result
+        from bmswatch.config import Watch
+        tg = FakeTelegram()
+        n = self._notifier(tg)
+        n.repeat_count = 1
+        snap = parse_showtimes(payload(), "ET00436621", "20260925")
+        w = Watch(id="w", movie="M", chat_id="777")
+        result = CheckResult("w", "open", "", matched=snap.shows,
+                             fresh=snap.shows, snapshot=snap)
+        with tempfile.TemporaryDirectory() as tmp:
+            tg.drain = lambda: None
+            handle_result(w, result, State(Path(tmp) / "s.json"), n, verbose=False)
+        self.assertEqual(tg.sent[0]["chat_id"], "777")
+
+    def test_alert_sink_overrides_delivery(self):
+        from bmswatch.engine import CheckResult, handle_result
+        from bmswatch.config import Watch
+        tg = FakeTelegram()
+        n = self._notifier(tg)
+        captured = []
+        snap = parse_showtimes(payload(), "ET00436621", "20260925")
+        w = Watch(id="w", movie="M", chat_id="777")
+        result = CheckResult("w", "open", "", matched=snap.shows,
+                             fresh=snap.shows, snapshot=snap)
+        with tempfile.TemporaryDirectory() as tmp:
+            handle_result(w, result, State(Path(tmp) / "s.json"), n, verbose=False,
+                          alert_sink=lambda *a: captured.append(a))
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(len(tg.sent), 0)          # nothing sent directly
+
+
 class TestTelegram(unittest.TestCase):
     def _telegram(self):
         from bmswatch.config import TelegramConfig

@@ -191,29 +191,56 @@ class Notifier:
             except Exception as exc:
                 print(f"[notify] telegram info failed: {exc}", flush=True)
 
-    def alert(self, watch_id: str, title: str, body_html: str, plain: str,
-              book_url: str) -> None:
-        """Ping repeatedly until the user acknowledges or we run out of rounds."""
-        if not self.channels:
-            print(f"[notify] no channel configured -- would have alerted:\n{plain}", flush=True)
-            return
-
-        buttons = [
+    @staticmethod
+    def _buttons(watch_id: str, book_url: str) -> List[dict]:
+        return [
             {"text": "🎟 Book now", "url": book_url},
             {"text": "✅ Got it", "callback_data": f"ack:{watch_id}"},
         ]
+
+    def _no_channel(self, plain: str) -> bool:
+        if self.channels:
+            return False
+        print(f"[notify] no channel configured -- would have alerted:\n{plain}",
+              flush=True)
+        return True
+
+    def alert_once(self, watch_id: str, title: str, body_html: str, plain: str,
+                   book_url: str, round_no: int = 1, rounds: int = 1,
+                   chat_id: Optional[str] = None) -> None:
+        """Send a single ping.
+
+        The bot loop schedules these itself rather than calling `alert`, so it
+        stays responsive between rounds and the Got it button works at once.
+        """
+        if self._no_channel(plain):
+            return
+        prefix = ("" if round_no <= 1
+                  else f"🔁 <b>Reminder {round_no}/{rounds}</b>\n\n")
+        if self.telegram:
+            try:
+                self.telegram.send(prefix + body_html,
+                                   keyboard=[self._buttons(watch_id, book_url)],
+                                   chat_id=chat_id)
+            except Exception as exc:
+                print(f"[notify] telegram send failed: {exc}", flush=True)
+        self.desktop.send(title, plain)
+
+    def alert(self, watch_id: str, title: str, body_html: str, plain: str,
+              book_url: str, chat_id: Optional[str] = None) -> None:
+        """Ping repeatedly until acknowledged, blocking in between.
+
+        Only for one-shot runs (`check`). Long-running mode uses alert_once.
+        """
+        if self._no_channel(plain):
+            return
         if self.telegram:
             self.telegram.drain()
 
         for round_no in range(1, self.repeat_count + 1):
-            prefix = "" if round_no == 1 else f"🔁 <b>Reminder {round_no}/{self.repeat_count}</b>\n\n"
-            if self.telegram:
-                try:
-                    self.telegram.send(prefix + body_html, buttons=buttons)
-                except Exception as exc:
-                    print(f"[notify] telegram send failed: {exc}", flush=True)
-            self.desktop.send(title, plain)
-
+            self.alert_once(watch_id, title, body_html, plain, book_url,
+                            round_no=round_no, rounds=self.repeat_count,
+                            chat_id=chat_id)
             if round_no == self.repeat_count:
                 break
 
