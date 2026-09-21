@@ -24,6 +24,11 @@ cat > "$PLIST" <<PLISTEOF
   <key>KeepAlive</key>
   <dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>30</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- otherwise Python buffers stdout to the log file and it stays empty -->
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+  </dict>
   <key>StandardOutPath</key><string>$HERE/logs/watchdog.log</string>
   <key>StandardErrorPath</key><string>$HERE/logs/watchdog.err</string>
   <key>ProcessType</key><string>Background</string>
@@ -31,9 +36,22 @@ cat > "$PLIST" <<PLISTEOF
 </plist>
 PLISTEOF
 
-launchctl unload "$PLIST" 2>/dev/null || true
-launchctl load "$PLIST"
-echo "Installed and started: $LABEL"
+DOMAIN="gui/$(id -u)"
+
+# bootout/bootstrap is the modern pair; `load` leaves RunAtLoad unfired on
+# recent macOS, which silently gives you an installed service that never runs
+launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+sleep 2                     # bootout is async; bootstrapping too soon gives EIO
+launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || launchctl load "$PLIST"
+# RunAtLoad does not reliably fire on bootstrap, so start it explicitly
+launchctl kickstart "$DOMAIN/$LABEL" 2>/dev/null || true
+
+sleep 4
+if launchctl print "$DOMAIN/$LABEL" 2>/dev/null | grep -q "state = running"; then
+  echo "Installed and running: $LABEL"
+else
+  echo "WARNING: $LABEL installed but not running. Check logs/watchdog.err" >&2
+fi
 echo "  logs:     tail -f $HERE/logs/watchdog.log"
-echo "  stop:     launchctl unload $PLIST"
+echo "  stop:     launchctl bootout gui/\$(id -u)/$LABEL"
 echo "  restart:  bash scripts/install-launchd.sh"
