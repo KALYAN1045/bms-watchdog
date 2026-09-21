@@ -126,46 +126,60 @@ source .env
 The process needs roughly **40 MB of RAM** and a fraction of a CPU. That fits
 inside free tiers that are free *forever*, not free-for-12-months.
 
-### Oracle Cloud Always Free — recommended
+### Google Cloud Always Free — recommended
 
-The only mainstream provider giving a permanently free VM in **India**
-(Mumbai and Hyderabad regions), which also means a local IP and low latency.
+One `e2-micro` instance, free with no end date, and — unlike Oracle — no
+policy of reclaiming instances for being idle. That matters here, because a
+watchdog polling once a minute *is* idle by any CPU measure.
 
 | | |
 |---|---|
 | Cost | ₹0/month, no expiry |
-| Machine | `VM.Standard.E2.1.Micro` — 1 GB RAM, 1/8 OCPU. You get two |
-| Signup | Card required for identity verification; Always Free resources are never charged |
-| Catch | The bigger ARM (Ampere A1) shapes are often out of capacity. Don't bother — the AMD micro is 25× more than this needs |
+| Machine | `e2-micro` — 2 vCPU burst, 1 GB RAM, 30 GB disk |
+| Regions | `us-west1` (Oregon), `us-central1` (Iowa), `us-east1` (S. Carolina) |
+| Egress | 1 GB/month outbound. This uses roughly 45 MB |
+| Catch | US datacenter IP, and a card is needed for identity verification |
 
-1. Sign up at `cloud.oracle.com`, choosing **Mumbai** or **Hyderabad** as your
-   home region (this cannot be changed later).
-2. Create a Compute instance: image **Ubuntu 22.04**, shape
-   **VM.Standard.E2.1.Micro** (it's labelled *Always Free eligible*).
-3. Save the SSH private key it offers you — that's your only copy.
+1. Sign up at `cloud.google.com/free`, create a project.
+2. Compute Engine → Create instance → machine type **e2-micro**, region one of
+   the three above, boot disk **Ubuntu 22.04**, disk size 30 GB.
+3. Add your SSH key under Security → Manage Access.
 4. From your Mac:
 
 ```bash
-bash scripts/deploy.sh ubuntu@<your-instance-ip>
+bash scripts/deploy.sh <user>@<external-ip>
 ```
 
-That syncs the folder, creates a venv, runs `doctor` as a gate, and installs a
-**systemd service** that starts at boot and restarts on crash. No Docker, no
-browser — about 40 MB resident.
+That syncs the folder, creates a venv, runs `doctor` **as a gate**, then
+installs a systemd service that starts at boot and restarts on crash. No
+Docker, no browser — about 40 MB resident.
 
 ```bash
-ssh ubuntu@<ip> 'journalctl -u bms-watchdog -f'      # live logs
-ssh ubuntu@<ip> 'sudo systemctl restart bms-watchdog'
+ssh <user>@<ip> 'journalctl -u bms-watchdog -f'      # live logs
+ssh <user>@<ip> 'sudo systemctl restart bms-watchdog'
 ```
 
 Re-run `deploy.sh` any time you change the watchlist.
 
-### Google Cloud Always Free
+### Oracle Cloud Always Free — Indian IP, but read this first
 
-Same idea — one `e2-micro` free forever — but only in `us-west1`,
-`us-central1` or `us-east1`. That's a US datacenter IP, which Cloudflare may
-rate worse than an Indian one. `doctor` tells you in 30 seconds, so it's a
-cheap thing to try if Oracle's signup gives you trouble.
+Oracle is the only provider offering a permanently free VM in **Mumbai or
+Hyderabad**, which is appealing: a local IP is the least likely to be rated
+badly by Cloudflare. Two things to understand before choosing it.
+
+**Signing up starts a 30-day trial *and* grants Always Free resources.** They
+coexist. When the trial ends the credits expire but Always Free resources keep
+running — *provided* you chose a shape marked **"Always Free eligible"**
+(`VM.Standard.E2.1.Micro`). Pick anything else and it dies on day 30.
+
+**Oracle reclaims idle Always Free instances.** If, across 7 days, CPU
+(95th percentile) is under 20% *and* network is under 20%, the instance is
+reclaimed. This watchdog sits near 0% CPU, so it would very likely qualify.
+Your options are to upgrade the account to Pay As You Go — Always Free
+resources stay free and reclamation no longer applies, but a card is then
+liable for anything outside the free limits — or to use Google Cloud instead.
+Manufacturing fake load to stay above the threshold is not a solution worth
+having; it burns a free resource to no purpose.
 
 ### Any other Linux box
 
