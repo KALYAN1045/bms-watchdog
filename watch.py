@@ -478,6 +478,22 @@ def cmd_bot(args) -> int:
             print(f"{datetime.now():%H:%M:%S} ⚠️  bot poll failed: {exc}", flush=True)
             time.sleep(2)
 
+        # a watch removed from /list must stop pinging at once, so pick up
+        # store changes here rather than waiting for the next check
+        if dirty["config"]:
+            dirty["config"] = False
+            try:
+                settings = _load(args)
+            except SystemExit:
+                pass
+            live = {w.id for w in settings.watches if w.enabled}
+            dropped = [p.watch_id for p in pending if p.watch_id not in live]
+            if dropped:
+                print(f"{datetime.now():%H:%M:%S} 🔕 cancelled pending alerts for "
+                      f"{', '.join(dropped)}", flush=True)
+            pending = [p for p in pending if p.watch_id in live]
+            last_check = 0.0            # re-check now that the watchlist changed
+
         # anything the user acknowledged stops repeating immediately
         if bot.acked:
             pending = [p for p in pending if p.watch_id not in bot.acked]
@@ -499,13 +515,7 @@ def cmd_bot(args) -> int:
                 still.append(alert)
         pending = still
 
-        if dirty["config"] or now - last_check >= settings.poll_seconds:
-            if dirty["config"]:
-                dirty["config"] = False
-                try:
-                    settings = _load(args)       # pick up watches the bot just added
-                except SystemExit:
-                    pass
+        if now - last_check >= settings.poll_seconds:
             _run_pass(settings, state, notifier, args.verbose, pool, alert_sink=sink)
             state.save()
             last_check = time.time()

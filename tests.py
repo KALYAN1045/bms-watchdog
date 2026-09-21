@@ -749,6 +749,23 @@ class TestBotFlow(unittest.TestCase):
         self.text("/list")
         self.assertIn("Evening", self.tg.last_text())
 
+    def test_removing_a_watch_signals_the_runner(self):
+        """The loop prunes in-flight alerts on this signal, so it must fire."""
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        self.text("/add")
+        self.click(self.tg.press("Paradise"))
+        self.click(self.tg.press("Any theatre"))
+        self.click(self.tg.press("Any date"))
+        self.click(self.tg.press("Any time"))
+        self.click("ok")
+        watch_id = self.store.watches(self.chat)[0]["id"]
+
+        self.changes.clear()
+        self.click(f"rm:{watch_id}")
+        self.assertEqual(self.store.watches(self.chat), [])
+        self.assertTrue(self.changes, "removal must tell the runner to reload")
+
     def test_ack_button_is_recorded_for_the_scheduler(self):
         self.click("ack:some-watch")
         self.assertIn("some-watch", self.bot.acked)
