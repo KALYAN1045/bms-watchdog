@@ -397,7 +397,8 @@ def _alert_record(watch, title, body, plain, url, settings) -> dict:
             "sent": 0, "next_at": 0.0}
 
 
-def _send_due(pending: List[dict], notifier: Notifier, settings) -> List[dict]:
+def _send_due(pending: List[dict], notifier: Notifier, settings,
+              budget: float = 0.0) -> List[dict]:
     """Send whichever pings are due; return the alerts that still have some left.
 
     Pings go out in bursts -- `burst_size` of them `burst_gap_seconds` apart,
@@ -406,12 +407,15 @@ def _send_due(pending: List[dict], notifier: Notifier, settings) -> List[dict]:
     schedule can span several one-shot runs.
     """
     tg = settings.telegram
-    now = time.time()
     keep: List[dict] = []
     for alert in pending:
         size = max(1, alert.get("burst_size", 1))
         total = size * max(1, alert.get("bursts", 1))
-        if now >= alert["next_at"]:
+        left = budget
+
+        while alert["sent"] < total:
+            if time.time() < alert["next_at"]:
+                break
             alert["sent"] += 1
             burst_no = (alert["sent"] - 1) // size + 1
             try:
@@ -422,10 +426,22 @@ def _send_due(pending: List[dict], notifier: Notifier, settings) -> List[dict]:
             except Exception as exc:          # never let one alert kill the run
                 print(f"{datetime.now():%H:%M:%S} ⚠️  alert "
                       f"'{alert['watch_id']}' failed: {exc}", flush=True)
+
             # still inside this burst? quick gap. burst finished? long wait.
             inside_burst = alert["sent"] % size != 0
-            alert["next_at"] = now + (tg.burst_gap_seconds if inside_burst
-                                      else tg.repeat_every_seconds)
+            gap = tg.burst_gap_seconds if inside_burst else tg.repeat_every_seconds
+            alert["next_at"] = time.time() + gap
+
+            # One-shot runs (cron, CI) come back minutes later, which would
+            # stretch a 20-second burst across separate runs. Spend a small
+            # budget finishing the burst here; never wait out the long gap.
+            if inside_burst and left >= gap:
+                time.sleep(gap)
+                left -= gap
+                alert["next_at"] = time.time()    # waited it out; due now
+            else:
+                break
+
         if alert["sent"] < total:
             keep.append(alert)
     return keep
@@ -483,7 +499,9 @@ def cmd_check(args) -> int:
                       _alert_record(w, t, b, p_, u, settings)))
     finally:
         pool.close()
-        state.set_pending(_send_due(pending, notifier, settings))
+        # finish any in-flight burst before exiting, so a one-shot run still
+        # delivers a burst as a burst
+        state.set_pending(_send_due(pending, notifier, settings, budget=120.0))
         state.save()
     return 0
 

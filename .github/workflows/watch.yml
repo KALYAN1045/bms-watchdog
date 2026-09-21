@@ -20,6 +20,12 @@
 # press is answered on the next run, so up to 5-20 minutes later. For a bot
 # that replies instantly you need a long-running process -- `watch.py bot` on
 # a VM (see the README).
+#
+# Practical hybrid: create your alerts with the bot running locally (instant),
+# commit watches.json, and let this workflow do the 24/7 watching.
+#
+# A burst of pings is delivered inside a single run, so alerts still arrive as
+# bursts; only the long gap between bursts spans runs.
 name: watch
 
 on:
@@ -37,7 +43,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15        # a run may spend ~2 min finishing an alert burst
     steps:
       - uses: actions/checkout@v4
 

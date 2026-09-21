@@ -437,9 +437,12 @@ class TestAlertScheduling(unittest.TestCase):
 
     def _watch_py(self):
         import importlib.util
+        if "watchcli" in sys.modules:
+            return sys.modules["watchcli"]
         spec = importlib.util.spec_from_file_location(
             "watchcli", str(Path(__file__).resolve().parent / "watch.py"))
         mod = importlib.util.module_from_spec(spec)
+        sys.modules["watchcli"] = mod          # so mock.patch can find it
         spec.loader.exec_module(mod)
         return mod
 
@@ -515,6 +518,45 @@ class TestAlertScheduling(unittest.TestCase):
         self.assertFalse(any("Reminder" in t for t in texts[:3]))   # burst 1 is fresh
         self.assertTrue(all("Reminder 2/3" in t for t in texts[3:6]))
         self.assertTrue(all("Reminder 3/3" in t for t in texts[6:9]))
+
+    def test_one_shot_run_finishes_the_burst_but_not_the_long_wait(self):
+        """A cron/CI run comes back minutes later; a 20s burst must not be
+        smeared across separate runs."""
+        cli = self._watch_py()
+        tg = FakeTelegram()
+        settings = self._settings(bursts=3, every=1800, size=3, gap=20)
+        n = self._notifier(tg)
+        pending = [self._record(settings)]
+
+        slept = []
+        with mock.patch("watchcli.time.sleep", side_effect=slept.append):
+            pending = cli._send_due(pending, n, settings, budget=120.0)
+
+        self.assertEqual(len(tg.sent), 3)          # the whole first burst
+        self.assertEqual(slept, [20, 20])          # only the short gaps
+        self.assertEqual(pending[0]["sent"], 3)
+        self.assertGreater(pending[0]["next_at"] - time.time(), 1000)   # burst 2 later
+
+    def test_zero_budget_sends_only_what_is_due(self):
+        cli = self._watch_py()
+        tg = FakeTelegram()
+        settings = self._settings(bursts=3, size=3, gap=20)
+        n = self._notifier(tg)
+        with mock.patch("watchcli.time.sleep") as slept:
+            pending = cli._send_due([self._record(settings)], n, settings)
+        self.assertEqual(len(tg.sent), 1)
+        slept.assert_not_called()
+
+    def test_budget_too_small_stops_mid_burst_and_resumes_later(self):
+        cli = self._watch_py()
+        tg = FakeTelegram()
+        settings = self._settings(bursts=2, size=3, gap=20)
+        n = self._notifier(tg)
+        pending = [self._record(settings)]
+        with mock.patch("watchcli.time.sleep"):
+            pending = cli._send_due(pending, n, settings, budget=20.0)
+        self.assertEqual(len(tg.sent), 2)          # only one short gap affordable
+        self.assertEqual(pending[0]["sent"], 2)
 
     def test_send_due_survives_a_failing_send(self):
         cli = self._watch_py()

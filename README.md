@@ -240,14 +240,25 @@ containerised, though on a 1 GB box systemd is the lighter choice.
 ### GitHub Actions — zero signup, but laggy
 
 `.github/workflows/watch.yml` runs on GitHub's free minutes with no card at
-all. Two caveats. GitHub's cron has a 5-minute floor and is routinely 5–20
-minutes late — fine as a backstop, not for a first-day scramble. And the
-**bot replies at that same cadence**: `watch.py check` handles queued Telegram
-commands each run, so tapping a button gets an answer on the *next* run,
-minutes later. Workable for setting an alert once; unpleasant as a chat.
+all, and needs no server. Two caveats:
 
-For a bot that answers instantly, you need `watch.py bot` running
-continuously — that means a VM, not Actions.
+* **Timing.** GitHub's cron has a 5-minute floor and is routinely 5–20 minutes
+  late. Fine as a backstop; not for a first-day scramble.
+* **The bot replies at that same cadence.** `watch.py check` handles queued
+  Telegram commands on each run, so tapping a button gets an answer on the
+  *next* run. Workable for setting an alert once; unpleasant as a chat.
+
+Alert bursts are not affected: a whole burst is delivered within one run, and
+only the 30-minute gap between bursts spans runs.
+
+**The practical hybrid:** create your alerts with the bot running locally on
+your Mac, where it answers instantly, then commit `watches.json` and let
+Actions do the round-the-clock watching.
+
+```bash
+./venv/bin/python watch.py bot     # locally: /add your alerts, then Ctrl-C
+git add watches.json && git commit -m "watch: add alerts" && git push
+```
 
 ### Your Mac
 
