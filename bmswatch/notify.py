@@ -173,6 +173,8 @@ class Notifier:
         self.desktop = Desktop(desktop_cfg)
         self.repeat_count = max(1, telegram_cfg.repeat_count)
         self.repeat_every = max(5, telegram_cfg.repeat_every_seconds)
+        self.burst_size = max(1, getattr(telegram_cfg, "burst_size", 1))
+        self.burst_gap = max(1, getattr(telegram_cfg, "burst_gap_seconds", 20))
         self.verbose = verbose
 
     @property
@@ -237,16 +239,19 @@ class Notifier:
         if self.telegram:
             self.telegram.drain()
 
-        for round_no in range(1, self.repeat_count + 1):
+        total = self.burst_size * self.repeat_count
+        for ping in range(1, total + 1):
+            burst_no = (ping - 1) // self.burst_size + 1
             self.alert_once(watch_id, title, body_html, plain, book_url,
-                            round_no=round_no, rounds=self.repeat_count,
+                            round_no=burst_no, rounds=self.repeat_count,
                             chat_id=chat_id)
-            if round_no == self.repeat_count:
+            if ping == total:
                 break
 
-            # wait out the interval, checking for an ack every couple of seconds
+            # quick gap inside a burst, long wait between bursts
+            gap = self.burst_gap if ping % self.burst_size else self.repeat_every
             waited = 0
-            while waited < self.repeat_every:
+            while waited < gap:
                 time.sleep(2)
                 waited += 2
                 if self.telegram and self.telegram.check_ack(watch_id):

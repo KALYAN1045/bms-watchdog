@@ -4,6 +4,7 @@
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -379,23 +380,20 @@ class TestNotifier(unittest.TestCase):
         self.assertNotIn("Reminder", tg.sent[0]["text"])
         self.assertIn("Reminder 3/8", tg.sent[1]["text"])
 
-    def test_alert_repeats_then_stops(self):
+    def test_alert_sends_every_ping_of_every_burst(self):
         tg = FakeTelegram()
         n = self._notifier(tg)
-        n.repeat_every = 5
-        with mock.patch.object(n, "_no_channel", return_value=False), \
-             mock.patch("bmswatch.notify.time.sleep"):
-            tg.check_ack = lambda wid: False
-            tg.drain = lambda: None
+        n.repeat_count, n.burst_size = 3, 3        # 3 bursts of 3
+        n.repeat_every, n.burst_gap = 5, 1
+        with mock.patch("bmswatch.notify.time.sleep"):
             n.alert("wid", "T", "body", "plain", "u")
-        self.assertEqual(len(tg.sent), 3)          # repeat_count
+        self.assertEqual(len(tg.sent), 9)
 
     def test_alert_stops_early_once_acknowledged(self):
         tg = FakeTelegram()
+        tg.acked = True
         n = self._notifier(tg)
-        n.repeat_every = 5
-        tg.drain = lambda: None
-        tg.check_ack = lambda wid: True
+        n.repeat_every, n.burst_gap = 5, 1
         with mock.patch("bmswatch.notify.time.sleep"):
             n.alert("wid", "T", "body", "plain", "u")
         self.assertEqual(len(tg.sent), 2)          # first ping, then the "stopped" note
@@ -411,8 +409,8 @@ class TestNotifier(unittest.TestCase):
         w = Watch(id="w", movie="M", chat_id="777")
         result = CheckResult("w", "open", "", matched=snap.shows,
                              fresh=snap.shows, snapshot=snap)
+        n.repeat_count, n.burst_size = 1, 1
         with tempfile.TemporaryDirectory() as tmp:
-            tg.drain = lambda: None
             handle_result(w, result, State(Path(tmp) / "s.json"), n, verbose=False)
         self.assertEqual(tg.sent[0]["chat_id"], "777")
 
@@ -445,11 +443,17 @@ class TestAlertScheduling(unittest.TestCase):
         spec.loader.exec_module(mod)
         return mod
 
-    def _settings(self, rounds=3, every=1800):
+    def _settings(self, bursts=3, every=1800, size=3, gap=20):
         from bmswatch.config import Settings, TelegramConfig
-        return Settings(telegram=TelegramConfig(bot_token="t", chat_id="9",
-                                                repeat_count=rounds,
-                                                repeat_every_seconds=every))
+        return Settings(telegram=TelegramConfig(
+            bot_token="t", chat_id="9", repeat_count=bursts,
+            repeat_every_seconds=every, burst_size=size, burst_gap_seconds=gap))
+
+    def _record(self, settings, watch_id="w"):
+        from bmswatch.config import Watch
+        cli = self._watch_py()
+        return cli._alert_record(Watch(id=watch_id, movie="M", chat_id="9"),
+                                 "T", "b", "p", "u", settings)
 
     def _notifier(self, tg):
         from bmswatch.config import DesktopConfig, TelegramConfig
@@ -459,48 +463,65 @@ class TestAlertScheduling(unittest.TestCase):
         n.telegram = tg
         return n
 
-    def test_send_due_sends_one_round_then_waits(self):
+    def test_gap_is_short_inside_a_burst_and_long_between_bursts(self):
         cli = self._watch_py()
-        tg, settings = FakeTelegram(), self._settings()
+        tg = FakeTelegram()
+        settings = self._settings(bursts=3, every=1800, size=3, gap=20)
         n = self._notifier(tg)
-        pending = [{"watch_id": "w", "chat_id": "9", "title": "T", "body": "b",
-                    "plain": "p", "url": "u", "rounds": 3, "sent": 0, "next_at": 0.0}]
+        pending = [self._record(settings)]
 
-        pending = cli._send_due(pending, n, settings)
+        now = time.time()
+        pending = cli._send_due(pending, n, settings)          # ping 1 of burst 1
         self.assertEqual(len(tg.sent), 1)
-        self.assertEqual(pending[0]["sent"], 1)
+        self.assertLess(pending[0]["next_at"] - now, 30)       # quick gap
 
-        # immediately after, nothing more is due -- no blocking, no extra pings
-        pending = cli._send_due(pending, n, settings)
-        self.assertEqual(len(tg.sent), 1)
+        pending[0]["next_at"] = 0
+        pending = cli._send_due(pending, n, settings)          # ping 2
+        self.assertLess(pending[0]["next_at"] - time.time(), 30)
 
-        # once the interval has passed, the next round goes out
-        pending[0]["next_at"] = 0.0
-        pending = cli._send_due(pending, n, settings)
-        self.assertEqual(len(tg.sent), 2)
+        pending[0]["next_at"] = 0
+        pending = cli._send_due(pending, n, settings)          # ping 3 ends burst 1
+        self.assertEqual(len(tg.sent), 3)
+        self.assertGreater(pending[0]["next_at"] - time.time(), 1000)   # long wait
 
-    def test_schedule_finishes_after_the_configured_rounds(self):
+    def test_three_bursts_of_three_is_nine_pings_then_silence(self):
         cli = self._watch_py()
-        tg, settings = FakeTelegram(), self._settings(rounds=3)
+        tg = FakeTelegram()
+        settings = self._settings(bursts=3, size=3)
         n = self._notifier(tg)
-        pending = [{"watch_id": "w", "chat_id": "9", "title": "T", "body": "b",
-                    "plain": "p", "url": "u", "rounds": 3, "sent": 0, "next_at": 0.0}]
-        for _ in range(5):
+        pending = [self._record(settings)]
+        for _ in range(20):                      # force every gap to elapse
             for item in pending:
                 item["next_at"] = 0.0
             pending = cli._send_due(pending, n, settings)
-        self.assertEqual(len(tg.sent), 3)
+            if not pending:
+                break
+        self.assertEqual(len(tg.sent), 9)
         self.assertEqual(pending, [])
+
+    def test_reminder_header_counts_bursts_not_pings(self):
+        cli = self._watch_py()
+        tg = FakeTelegram()
+        settings = self._settings(bursts=3, size=3)
+        n = self._notifier(tg)
+        pending = [self._record(settings)]
+        for _ in range(20):
+            for item in pending:
+                item["next_at"] = 0.0
+            pending = cli._send_due(pending, n, settings)
+            if not pending:
+                break
+        texts = [m["text"] for m in tg.sent]
+        self.assertFalse(any("Reminder" in t for t in texts[:3]))   # burst 1 is fresh
+        self.assertTrue(all("Reminder 2/3" in t for t in texts[3:6]))
+        self.assertTrue(all("Reminder 3/3" in t for t in texts[6:9]))
 
     def test_send_due_survives_a_failing_send(self):
         cli = self._watch_py()
         tg, settings = FakeTelegram(), self._settings()
         n = self._notifier(tg)
         with mock.patch.object(n, "alert_once", side_effect=RuntimeError("boom")):
-            pending = cli._send_due(
-                [{"watch_id": "w", "chat_id": "9", "title": "T", "body": "b",
-                  "plain": "p", "url": "u", "rounds": 3, "sent": 0, "next_at": 0.0}],
-                n, settings)
+            pending = cli._send_due([self._record(settings)], n, settings)
         self.assertEqual(pending[0]["sent"], 1)      # counted, not retried forever
 
     def test_pending_round_trips_through_state(self):
@@ -609,6 +630,14 @@ class FakeTelegram:
 
     def get_updates(self, offset=None, timeout=0, allowed=None):
         return []
+
+    def drain(self):
+        pass
+
+    def check_ack(self, watch_id):
+        return self.acked
+
+    acked = False
 
     # helpers
     @property

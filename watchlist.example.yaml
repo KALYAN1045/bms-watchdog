@@ -19,8 +19,10 @@ defaults:
 telegram:
   bot_token: ${TELEGRAM_BOT_TOKEN}
   chat_id: ${TELEGRAM_CHAT_ID}
-  repeat_count: 3          # keep pinging this many times...
-  repeat_every_seconds: 1800 # ...this far apart (seconds), until "✅ Got it"
+  burst_size: 3            # pings in a row, to actually get your attention
+  burst_gap_seconds: 20    # seconds between those pings
+  repeat_count: 3          # how many bursts before it gives up
+  repeat_every_seconds: 1800   # 30 min between bursts; stops on "✅ Got it"
 
 desktop:
   enabled: true            # macOS banner + sound alongside Telegram; false on a server

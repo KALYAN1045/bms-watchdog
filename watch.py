@@ -388,34 +388,45 @@ def _run_pass(settings, state, notifier, verbose, pool: "SessionPool",
 
 
 def _alert_record(watch, title, body, plain, url, settings) -> dict:
+    tg = settings.telegram
     return {"watch_id": watch.id,
-            "chat_id": watch.chat_id or settings.telegram.chat_id,
+            "chat_id": watch.chat_id or tg.chat_id,
             "title": title, "body": body, "plain": plain, "url": url,
-            "rounds": max(1, settings.telegram.repeat_count),
+            "bursts": max(1, tg.repeat_count),
+            "burst_size": max(1, tg.burst_size),
             "sent": 0, "next_at": 0.0}
 
 
 def _send_due(pending: List[dict], notifier: Notifier, settings) -> List[dict]:
-    """Send whichever repeat rounds are due; return what still has rounds left.
+    """Send whichever pings are due; return the alerts that still have some left.
 
-    Nothing here blocks, so a long repeat interval (say 30 minutes) never
-    stops the watchdog from checking, or overruns a CI job's time limit.
+    Pings go out in bursts -- `burst_size` of them `burst_gap_seconds` apart,
+    then a long `repeat_every_seconds` wait before the next burst. Nothing
+    here blocks, so a 30-minute gap never stops the watchdog checking, and a
+    schedule can span several one-shot runs.
     """
+    tg = settings.telegram
     now = time.time()
     keep: List[dict] = []
     for alert in pending:
+        size = max(1, alert.get("burst_size", 1))
+        total = size * max(1, alert.get("bursts", 1))
         if now >= alert["next_at"]:
             alert["sent"] += 1
+            burst_no = (alert["sent"] - 1) // size + 1
             try:
                 notifier.alert_once(alert["watch_id"], alert["title"], alert["body"],
                                     alert["plain"], alert["url"],
-                                    round_no=alert["sent"], rounds=alert["rounds"],
+                                    round_no=burst_no, rounds=alert.get("bursts", 1),
                                     chat_id=alert["chat_id"])
             except Exception as exc:          # never let one alert kill the run
                 print(f"{datetime.now():%H:%M:%S} ⚠️  alert "
                       f"'{alert['watch_id']}' failed: {exc}", flush=True)
-            alert["next_at"] = now + settings.telegram.repeat_every_seconds
-        if alert["sent"] < alert["rounds"]:
+            # still inside this burst? quick gap. burst finished? long wait.
+            inside_burst = alert["sent"] % size != 0
+            alert["next_at"] = now + (tg.burst_gap_seconds if inside_burst
+                                      else tg.repeat_every_seconds)
+        if alert["sent"] < total:
             keep.append(alert)
     return keep
 
@@ -499,13 +510,14 @@ def _serve(args, with_bot: bool) -> int:
     signal.signal(signal.SIGTERM, _handle_signal)
 
     active = [w.id for w in settings.watches if w.enabled]
-    rounds = settings.telegram.repeat_count
-    every = settings.telegram.repeat_every_seconds
+    tg = settings.telegram
+    every = tg.repeat_every_seconds
     print(f"Watching {len(active)} movie(s){': ' + ', '.join(active) if active else ''}")
     print(f"Checking every {settings.poll_seconds}s · "
-          f"alerts via {', '.join(notifier.channels) or 'nothing!'} · "
-          f"{rounds} ping(s) {every // 60 or every}{'m' if every >= 60 else 's'} apart "
-          f"until acknowledged")
+          f"alerts via {', '.join(notifier.channels) or 'nothing!'}")
+    print(f"Alert pattern: {tg.burst_size} pings {tg.burst_gap_seconds}s apart, "
+          f"repeated {tg.repeat_count}x every "
+          f"{every // 60}m, until acknowledged")
     if bot:
         print("Open Telegram and send /start")
         notifier.info("🤖 Watchdog online. Send /start to set up alerts.", silent=True)

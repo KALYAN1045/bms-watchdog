@@ -296,9 +296,39 @@ free VM is a much better bet.
 [ 🎟 Book now ]  [ ✅ Got it ]
 ```
 
-It repeats every 30 s, up to 8 times, until you tap **✅ Got it** (or reply
-`ok`). Each distinct show alerts only once, ever — when more shows open later,
-only the new ones ping you.
+Alerts arrive in **bursts** — several pings close together, so one buzz you
+miss in your pocket doesn't cost you the booking, then a long gap before it
+tries again. The default is 3 pings 20 seconds apart, repeated every 30
+minutes, up to 3 times:
+
+```
+ 0m00s   🚨 ping 1        tickets open
+ 0m20s   🔁 ping 2
+ 0m40s   🔁 ping 3
+         ····· 30 minutes ·····
+30m40s   🔁 ping 4        Reminder 2/3
+31m00s   🔁 ping 5
+31m20s   🔁 ping 6
+         ····· 30 minutes ·····
+61m20s   🔁 ping 7        Reminder 3/3
+   …     then silence
+```
+
+Tapping **✅ Got it** (or replying `ok`) at any point cancels the rest — so in
+practice it's usually one ping. Tune it under `telegram:` in `watchlist.yaml`:
+
+| Key | Meaning | Default |
+|---|---|---|
+| `burst_size` | pings in a row | 3 |
+| `burst_gap_seconds` | spacing inside a burst | 20 |
+| `repeat_count` | how many bursts | 3 |
+| `repeat_every_seconds` | gap between bursts | 1800 (30 min) |
+
+Set `burst_size: 1` and `repeat_count: 1` for exactly one message, ever.
+
+Each distinct show alerts only once — when more shows open later, only the new
+ones ping you. The repeat schedule is held in `state.json`, so it survives a
+restart and can span several runs rather than blocking anything.
 
 ---
 

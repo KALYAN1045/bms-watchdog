@@ -137,10 +137,18 @@ def _proxy(value: Any) -> Optional[Dict[str, str]]:
 
 @dataclass
 class TelegramConfig:
+    """Alerts arrive in bursts: a few pings in quick succession to actually
+    get your attention, then the whole burst repeats after a longer gap."""
     bot_token: str = ""
     chat_id: str = ""
-    repeat_count: int = 8
-    repeat_every_seconds: int = 30
+    burst_size: int = 3               # pings in one burst
+    burst_gap_seconds: int = 20       # spacing between those pings
+    repeat_count: int = 3             # how many bursts before giving up
+    repeat_every_seconds: int = 1800  # gap between bursts
+
+    @property
+    def total_pings(self) -> int:
+        return max(1, self.burst_size) * max(1, self.repeat_count)
 
     @property
     def configured(self) -> bool:
@@ -281,8 +289,10 @@ def load(path: str | Path) -> Settings:
         telegram=TelegramConfig(
             bot_token=str(tg_raw.get("bot_token", "")).strip(),
             chat_id=str(tg_raw.get("chat_id", "")).strip(),
-            repeat_count=int(tg_raw.get("repeat_count", 8)),
-            repeat_every_seconds=int(tg_raw.get("repeat_every_seconds", 30)),
+            burst_size=max(1, int(tg_raw.get("burst_size", 3))),
+            burst_gap_seconds=max(5, int(tg_raw.get("burst_gap_seconds", 20))),
+            repeat_count=max(1, int(tg_raw.get("repeat_count", 3))),
+            repeat_every_seconds=max(30, int(tg_raw.get("repeat_every_seconds", 1800))),
         ),
         desktop=DesktopConfig(
             enabled=(os.environ.get("BMS_DESKTOP", "1") != "0"
