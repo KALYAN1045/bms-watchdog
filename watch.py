@@ -358,33 +358,41 @@ def cmd_doctor(args) -> int:
 
 
 def _run_pass(settings, state, notifier, verbose, pool: "SessionPool",
-              alert_sink=None) -> None:
+              alert_sink=None) -> bool:
+    """Returns True if every enabled watch was actually checked."""
     by_region = {}
     for watch in settings.watches:
         if watch.enabled:
             by_region.setdefault((watch.city, watch.region_code), []).append(watch)
 
+    healthy = True
     for (city, region), watches in by_region.items():
         try:
             session = pool.get(city, region)
-        except Exception as exc:                        # browser refused to start
-            print(f"{datetime.now():%H:%M:%S} ⚠️  browser: {exc}", flush=True)
+        except Exception as exc:
+            print(f"{datetime.now():%H:%M:%S} ❌ cannot reach BookMyShow: {exc}",
+                  flush=True)
+            healthy = False
             continue
 
         for watch in watches:
             if _stop:
-                return
+                return healthy
             try:
                 result = check_watch(session, watch, state)
             except Exception as exc:                    # never let one watch kill the loop
                 print(f"{datetime.now():%H:%M:%S} ⚠️  {watch.id}: {exc}", flush=True)
-                pool.drop(city, region)                 # start a clean browser next pass
+                pool.drop(city, region)                 # start a clean session next pass
+                healthy = False
                 break
             handle_result(watch, result, state, notifier, verbose=True,
                           alert_sink=alert_sink)
             if result.status == "error":
                 pool.drop(city, region)
+                healthy = False
                 break
+
+    return healthy
 
 
 def _alert_record(watch, title, body, plain, url, settings) -> dict:
@@ -494,15 +502,22 @@ def cmd_check(args) -> int:
 
     pool = SessionPool(settings, args.verbose)
     try:
-        _run_pass(settings, state, notifier, args.verbose, pool,
-                  alert_sink=lambda w, t, b, p_, u: pending.append(
-                      _alert_record(w, t, b, p_, u, settings)))
+        healthy = _run_pass(settings, state, notifier, args.verbose, pool,
+                            alert_sink=lambda w, t, b, p_, u: pending.append(
+                                _alert_record(w, t, b, p_, u, settings)))
     finally:
         pool.close()
         # finish any in-flight burst before exiting, so a one-shot run still
         # delivers a burst as a burst
         state.set_pending(_send_due(pending, notifier, settings, budget=120.0))
         state.save()
+
+    if not healthy:
+        # exit non-zero so a scheduled run shows up as failed rather than
+        # quietly watching nothing
+        print("\nThis run could not check BookMyShow. Nothing is being watched.",
+              flush=True)
+        return 1
     return 0
 
 

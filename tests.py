@@ -588,6 +588,78 @@ class TestAlertScheduling(unittest.TestCase):
                 st.mark_alerted("__pending__", ["x"])
 
 
+class TestFailsLoudly(unittest.TestCase):
+    """A watchdog that reports success while watching nothing is worse than
+    one that crashes -- you would never know to fix it."""
+
+    def test_blocked_host_raises_instead_of_limping_on(self):
+        from bmswatch.fetcher import FetchError, make_session
+        with mock.patch("bmswatch.fetcher.HTTPSession.start"), \
+             mock.patch("bmswatch.fetcher.HTTPSession.probe", return_value=False), \
+             mock.patch("bmswatch.fetcher.HTTPSession.close"), \
+             mock.patch.dict(sys.modules, {"playwright": None}):
+            with self.assertRaises(FetchError) as caught:
+                make_session(engine="auto", city="hyderabad")
+        message = str(caught.exception)
+        self.assertIn("exit IP", message)
+        self.assertIn("proxy", message)
+
+    def test_run_pass_reports_unhealthy_when_the_session_fails(self):
+        cli = self._cli()
+        from bmswatch.config import Settings, Watch
+        settings = Settings(watches=[Watch(id="w", movie="M", event_code="E1")])
+
+        class DeadPool:
+            def get(self, city, region):
+                raise RuntimeError("blocked")
+
+            def drop(self, *a):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ok = cli._run_pass(settings, State(Path(tmp) / "s.json"),
+                               self._silent_notifier(), False, DeadPool())
+        self.assertFalse(ok)
+
+    def test_run_pass_is_healthy_when_everything_checks(self):
+        cli = self._cli()
+        from bmswatch.config import Settings, Watch
+        from bmswatch.engine import CheckResult
+        settings = Settings(watches=[Watch(id="w", movie="M", event_code="E1")])
+
+        class LivePool:
+            def get(self, city, region):
+                return object()
+
+            def drop(self, *a):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch("watchcli.check_watch",
+                        return_value=CheckResult("w", "closed", "not open yet")):
+            ok = cli._run_pass(settings, State(Path(tmp) / "s.json"),
+                               self._silent_notifier(), False, LivePool())
+        self.assertTrue(ok)
+
+    # -- helpers -----------------------------------------------------------
+
+    def _cli(self):
+        import importlib.util
+        if "watchcli" in sys.modules:
+            return sys.modules["watchcli"]
+        spec = importlib.util.spec_from_file_location(
+            "watchcli", str(Path(__file__).resolve().parent / "watch.py"))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["watchcli"] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _silent_notifier(self):
+        from bmswatch.config import DesktopConfig, TelegramConfig
+        from bmswatch.notify import Notifier
+        return Notifier(TelegramConfig(), DesktopConfig(enabled=False))
+
+
 class TestTelegram(unittest.TestCase):
     def _telegram(self):
         from bmswatch.config import TelegramConfig

@@ -417,6 +417,17 @@ def make_session(engine: str = "auto", **kwargs) -> _BaseSession:
     if session.probe():
         return session
     session.close()
+
+    try:                                   # is the heavy fallback even possible?
+        import playwright  # noqa: F401
+    except ImportError:
+        raise FetchError(
+            "BookMyShow refused this host. The TLS fingerprint is right, so the "
+            "block is on the exit IP -- datacenter ranges (CI runners, most "
+            "VPSes) are rated badly. Run it somewhere with a residential IP, "
+            "set a proxy, or install Playwright to try the browser fallback."
+        ) from None
+
     print("[fetch] plain HTTP was blocked -- falling back to a browser", flush=True)
     return BrowserSession(**kwargs)
 
