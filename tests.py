@@ -216,6 +216,15 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(configmod.describe_slots([]), "Any time")
         self.assertIn("Evening", configmod.describe_slots(["evening"]))
 
+    def test_default_city_is_available_before_any_watch_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "w.yaml"
+            path.write_text("defaults:\n  city: bengaluru\n  region_code: bang\n")
+            cfg = configmod.load(path)
+        self.assertEqual(cfg.watches, [])
+        self.assertEqual(cfg.default_city, "bengaluru")
+        self.assertEqual(cfg.default_region, "BANG")
+
     def test_env_expansion_and_defaults(self):
         import os
         os.environ["BMS_TEST_TOKEN"] = "tok123"
@@ -422,6 +431,98 @@ class TestNotifier(unittest.TestCase):
                           alert_sink=lambda *a: captured.append(a))
         self.assertEqual(len(captured), 1)
         self.assertEqual(len(tg.sent), 0)          # nothing sent directly
+
+
+class TestAlertScheduling(unittest.TestCase):
+    """Repeats must survive across runs and never block, so that a long
+    interval (30 minutes) works in one-shot mode and in CI."""
+
+    def _watch_py(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "watchcli", str(Path(__file__).resolve().parent / "watch.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _settings(self, rounds=3, every=1800):
+        from bmswatch.config import Settings, TelegramConfig
+        return Settings(telegram=TelegramConfig(bot_token="t", chat_id="9",
+                                                repeat_count=rounds,
+                                                repeat_every_seconds=every))
+
+    def _notifier(self, tg):
+        from bmswatch.config import DesktopConfig, TelegramConfig
+        from bmswatch.notify import Notifier
+        n = Notifier(TelegramConfig(bot_token="t", chat_id="9"),
+                     DesktopConfig(enabled=False))
+        n.telegram = tg
+        return n
+
+    def test_send_due_sends_one_round_then_waits(self):
+        cli = self._watch_py()
+        tg, settings = FakeTelegram(), self._settings()
+        n = self._notifier(tg)
+        pending = [{"watch_id": "w", "chat_id": "9", "title": "T", "body": "b",
+                    "plain": "p", "url": "u", "rounds": 3, "sent": 0, "next_at": 0.0}]
+
+        pending = cli._send_due(pending, n, settings)
+        self.assertEqual(len(tg.sent), 1)
+        self.assertEqual(pending[0]["sent"], 1)
+
+        # immediately after, nothing more is due -- no blocking, no extra pings
+        pending = cli._send_due(pending, n, settings)
+        self.assertEqual(len(tg.sent), 1)
+
+        # once the interval has passed, the next round goes out
+        pending[0]["next_at"] = 0.0
+        pending = cli._send_due(pending, n, settings)
+        self.assertEqual(len(tg.sent), 2)
+
+    def test_schedule_finishes_after_the_configured_rounds(self):
+        cli = self._watch_py()
+        tg, settings = FakeTelegram(), self._settings(rounds=3)
+        n = self._notifier(tg)
+        pending = [{"watch_id": "w", "chat_id": "9", "title": "T", "body": "b",
+                    "plain": "p", "url": "u", "rounds": 3, "sent": 0, "next_at": 0.0}]
+        for _ in range(5):
+            for item in pending:
+                item["next_at"] = 0.0
+            pending = cli._send_due(pending, n, settings)
+        self.assertEqual(len(tg.sent), 3)
+        self.assertEqual(pending, [])
+
+    def test_send_due_survives_a_failing_send(self):
+        cli = self._watch_py()
+        tg, settings = FakeTelegram(), self._settings()
+        n = self._notifier(tg)
+        with mock.patch.object(n, "alert_once", side_effect=RuntimeError("boom")):
+            pending = cli._send_due(
+                [{"watch_id": "w", "chat_id": "9", "title": "T", "body": "b",
+                  "plain": "p", "url": "u", "rounds": 3, "sent": 0, "next_at": 0.0}],
+                n, settings)
+        self.assertEqual(pending[0]["sent"], 1)      # counted, not retried forever
+
+    def test_pending_round_trips_through_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            st = State(path)
+            st.set_pending([{"watch_id": "w", "sent": 1, "next_at": 123.0}])
+            st.mark_alerted("w", ["fp1"])
+            st.save()
+
+            again = State(path)
+            self.assertEqual(again.pending()[0]["watch_id"], "w")
+            self.assertEqual(again.new_fingerprints("w", ["fp1"]), [])
+            again.set_pending([])
+            again.save()
+            self.assertEqual(State(path).pending(), [])
+
+    def test_pending_key_cannot_collide_with_a_watch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            st = State(Path(tmp) / "state.json")
+            with self.assertRaises(KeyError):
+                st.mark_alerted("__pending__", ["x"])
 
 
 class TestTelegram(unittest.TestCase):

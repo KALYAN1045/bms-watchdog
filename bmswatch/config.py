@@ -161,6 +161,8 @@ class Settings:
     jitter_seconds: int = 10
     heartbeat_minutes: int = 0        # 0 = off
     state_file: str = "state.json"
+    default_city: str = "hyderabad"   # used before any watch exists
+    default_region: str = "HYD"
     engine: str = "auto"              # auto | http | browser
     profile_dir: str = ".chrome-profile"
     channel: str = "chrome"
@@ -267,6 +269,8 @@ def load(path: str | Path) -> Settings:
         jitter_seconds=int(defaults.get("jitter_seconds", 10)),
         heartbeat_minutes=int(defaults.get("heartbeat_minutes", 0)),
         state_file=str(defaults.get("state_file", "state.json")),
+        default_city=str(defaults.get("city", "hyderabad")).strip().lower(),
+        default_region=str(defaults.get("region_code", "HYD")).strip().upper(),
         engine=os.environ.get("BMS_ENGINE") or str(defaults.get("engine", "auto")),
         profile_dir=str(defaults.get("profile_dir", ".chrome-profile")),
         # env overrides let one watchlist.yaml serve both a laptop and a

@@ -13,8 +13,8 @@ defaults:
 telegram:
   bot_token: ${TELEGRAM_BOT_TOKEN}
   chat_id: ${TELEGRAM_CHAT_ID}
-  repeat_count: 8
-  repeat_every_seconds: 30
+  repeat_count: 3
+  repeat_every_seconds: 1800
 
 desktop:
   enabled: true
