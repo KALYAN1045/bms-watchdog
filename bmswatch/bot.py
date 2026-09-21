@@ -15,7 +15,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .bms import parse_showtimes
 from .catalogue import (Movie, Region, load_movies, load_regions, nearest_regions,
                         search_regions, top_regions)
-from .config import SLOT_ORDER, TIME_SLOTS, describe_slots
+from .config import SLOT_ORDER, TIME_SLOTS, Watch, describe_slots
+from .matcher import filter_shows
 from .fetcher import FetchError
 from .store import WatchStore
 
@@ -45,6 +46,7 @@ class Session:
     movies: List[Movie] = field(default_factory=list)
     movie: Optional[Movie] = None
     venues: List[str] = field(default_factory=list)
+    shows_by_date: Dict[str, list] = field(default_factory=dict)
     theatres: List[str] = field(default_factory=list)
     dates_available: List[str] = field(default_factory=list)
     dates: List[str] = field(default_factory=list)
@@ -345,44 +347,81 @@ class Bot:
             return self._show_movies(chat_id, message_id)
         movie = sess.movies[index]
         sess.movie = movie
-        sess.step = "theatres"
+        sess.step = "dates"
         sess.page = 0
         sess.theatres = []
+        sess.dates = []
+        sess.slots = []
+        sess.venues = []
+        sess.shows_by_date = {}
         city = self._city(chat_id)
 
         self._edit(chat_id, message_id,
-                   f"🎬 <b>{esc(movie.label)}</b>\n\nChecking which theatres have it…")
+                   f"🎬 <b>{esc(movie.label)}</b>\n\nChecking what's on sale…")
 
-        venues: List[str] = []
         dates: List[str] = []
         fetcher = self.session_factory(city["city"], city["region_code"])
         try:
             fetcher.start()
-            probe = parse_showtimes(
-                fetcher.showtimes(movie.code, datetime.now().strftime("%Y%m%d")),
-                movie.code, datetime.now().strftime("%Y%m%d"))
-            dates = probe.open_dates[:10]
-            if dates:
-                snap = parse_showtimes(fetcher.showtimes(movie.code, dates[0]),
-                                       movie.code, dates[0])
-                venues = sorted({s.venue for s in snap.shows})
+            today = datetime.now().strftime("%Y%m%d")
+            probe = parse_showtimes(fetcher.showtimes(movie.code, today),
+                                    movie.code, today)
+            dates = probe.open_dates[:8]
         except FetchError as exc:
-            self._log(f"venue probe failed: {exc}")
+            self._log(f"date probe failed: {exc}")
         finally:
             fetcher.close()
 
-        sess.venues = venues
         sess.dates_available = dates
-        sess.booking_open = bool(venues)
+        sess.booking_open = bool(dates)
+        text, rows = self._date_rows(sess)
+        self._edit(chat_id, message_id, text, keyboard=rows)
+
+    def _load_venues(self, chat_id: str, message_id: int) -> None:
+        """Theatres are listed for the dates actually chosen, not a guess."""
+        sess = self.session(chat_id)
+        city = self._city(chat_id)
+        movie = sess.movie
+        sess.step = "theatres"
+        sess.page = 0
+        sess.theatres = []
+
+        wanted = sess.dates or sess.dates_available[:5]
+        if not wanted:
+            sess.venues = []
+            sess.shows_by_date = {}
+            return self._show_theatres(chat_id, message_id)
+
+        self._edit(chat_id, message_id,
+                   f"🎬 <b>{esc(movie.label)}</b>\n\n"
+                   f"Checking which theatres have it on "
+                   f"{esc(', '.join(pretty_date(d) for d in wanted))}…")
+
+        shows: Dict[str, list] = {}
+        fetcher = self.session_factory(city["city"], city["region_code"])
+        try:
+            fetcher.start()
+            for code in wanted:
+                snap = parse_showtimes(fetcher.showtimes(movie.code, code),
+                                       movie.code, code)
+                shows[code] = snap.shows
+        except FetchError as exc:
+            self._log(f"venue lookup failed: {exc}")
+        finally:
+            fetcher.close()
+
+        sess.shows_by_date = shows
+        sess.venues = sorted({x.venue for day in shows.values() for x in day})
         self._show_theatres(chat_id, message_id)
 
     def _theatre_rows(self, sess: Session) -> Tuple[str, List[List[dict]]]:
         movie = sess.movie.label if sess.movie else "?"
+        when = ", ".join(pretty_date(d) for d in sess.dates) or "any date"
         if not sess.venues:
-            text = (f"🎬 <b>{esc(movie)}</b>\n\n"
-                    "Booking isn't open yet, so there are no theatres to list.\n"
+            text = (f"🎬 <b>{esc(movie)}</b>\n📅 {esc(when)}\n\n"
+                    "No theatre has it on sale for that yet.\n"
                     "I'll watch <b>every theatre</b> in your city and tell you the "
-                    "moment any of them opens.")
+                    "moment one opens.")
             return text, [[{"text": "✅ Watch all theatres", "callback_data": "th:all"}],
                           [{"text": "✖ Cancel", "callback_data": "x"}]]
 
@@ -404,9 +443,9 @@ class Bot:
         rows.append(nav)
         rows.append([{"text": "🏛 Any theatre", "callback_data": "th:all"},
                      {"text": f"✔ Done ({len(sess.theatres)})", "callback_data": "th:done"}])
-        text = (f"🎬 <b>{esc(movie)}</b>\n\n"
+        text = (f"🎬 <b>{esc(movie)}</b>\n📅 {esc(when)}\n\n"
                 f"<b>Which theatres?</b> Tap to select, or choose <i>Any theatre</i>.\n"
-                f"{total} currently showing it.")
+                f"{total} showing it on those dates.")
         return text, rows
 
     def _show_theatres(self, chat_id: str, message_id: int) -> None:
@@ -417,7 +456,6 @@ class Bot:
 
     def _date_rows(self, sess: Session) -> Tuple[str, List[List[dict]]]:
         movie = sess.movie.label if sess.movie else "?"
-        where = ", ".join(sess.theatres) if sess.theatres else "any theatre"
         rows = []
         for i, code in enumerate(sess.dates_available[:8]):
             mark = "☑️" if code in sess.dates else "▫️"
@@ -426,14 +464,14 @@ class Bot:
         rows.append([{"text": "📅 Any date", "callback_data": "dt:any"},
                      {"text": f"✔ Done ({len(sess.dates)})", "callback_data": "dt:done"}])
         hint = ("" if sess.dates_available else
-                "\n\n<i>No dates on sale yet — “Any date” is the one you want.</i>")
-        text = (f"🎬 <b>{esc(movie)}</b>\n🏛 {esc(where)}\n\n"
-                f"<b>Which dates?</b>{hint}")
+                "\n\n<i>Nothing on sale yet — “Any date” is the one you want.</i>")
+        text = (f"🎬 <b>{esc(movie)}</b>\n\n<b>Which dates?</b>{hint}")
         return text, rows
 
     def _time_rows(self, sess: Session) -> Tuple[str, List[List[dict]]]:
         movie = sess.movie.label if sess.movie else "?"
         when = ", ".join(pretty_date(d) for d in sess.dates) or "Any date"
+        where = ", ".join(sess.theatres) or "Any theatre"
         rows = []
         for i, key in enumerate(SLOT_ORDER):
             slot = TIME_SLOTS[key]
@@ -443,7 +481,7 @@ class Bot:
                 "callback_data": f"tm:{i}"}])
         rows.append([{"text": "🕐 Any time", "callback_data": "tm:any"},
                      {"text": f"✔ Done ({len(sess.slots)})", "callback_data": "tm:done"}])
-        text = (f"🎬 <b>{esc(movie)}</b>\n📅 {esc(when)}\n\n"
+        text = (f"🎬 <b>{esc(movie)}</b>\n🏛 {esc(where)}\n📅 {esc(when)}\n\n"
                 "<b>Which show timings?</b>\n"
                 "Pick as many as you like — I'll only alert for shows that start "
                 "in those windows.")
@@ -454,6 +492,51 @@ class Bot:
         self._edit(chat_id, message_id, text, keyboard=rows)
 
     # -- confirm and save --------------------------------------------------
+
+    def _preview(self, sess: Session) -> str:
+        """How many shows this alert matches right now.
+
+        Zero is legitimate -- that is the whole point when booking hasn't
+        opened -- but it must be said out loud, so a filter that can never
+        match (a theatre that doesn't screen it on those dates, say) is
+        obvious before the alert is created rather than as silence later.
+        """
+        if not sess.shows_by_date:
+            return ("🔔 Nothing on sale for this yet — you'll be pinged the "
+                    "moment it opens.")
+        probe = Watch(
+            id="preview", movie="preview",
+            theatres=list(sess.theatres),
+            slots=list(sess.slots),
+            windows=[(TIME_SLOTS[k]["from"], TIME_SLOTS[k]["to"])
+                     for k in sess.slots if k in TIME_SLOTS])
+        dates = sess.dates or list(sess.shows_by_date)
+        shows = [x for d in dates for x in sess.shows_by_date.get(d, [])]
+        hits = filter_shows(probe, shows)
+        if hits:
+            free = sum(1 for h in hits if not h.sold_out)
+            return (f"✅ <b>{len(hits)} show(s) already match</b> "
+                    f"({free} with seats). You'll be pinged about new ones.")
+
+        if not shows:
+            return ("🔔 Nothing on sale for those dates yet — you'll be pinged "
+                    "the moment it opens.")
+
+        # narrow down which filter is the one excluding everything
+        pool = shows
+        if sess.theatres:
+            pool = [x for x in shows
+                    if any(t.lower() in x.venue.lower() for t in sess.theatres)]
+            if not pool:
+                return ("⚠️ <b>That theatre has no shows on those dates yet.</b>\n"
+                        "Fine if you're waiting for it to add some — otherwise go "
+                        "back and widen the dates or theatres.")
+        if sess.slots:
+            where = "that theatre has" if sess.theatres else "there are"
+            return (f"⚠️ <b>No show matches your timings yet</b> — {where} "
+                    f"{len(pool)} show(s) on those dates, just not in those "
+                    "windows.")
+        return "🔔 Nothing matches yet — you'll be pinged when something does."
 
     def _confirm(self, chat_id: str, message_id: int) -> None:
         sess = self.session(chat_id)
@@ -470,8 +553,9 @@ class Bot:
             f"🏛 Theatres:\n{where}\n"
             f"📅 {esc(when)}\n"
             f"🕐 {esc(times)}\n\n"
-            "I'll ping you the moment matching tickets open.",
+            f"{self._preview(sess)}",
             keyboard=[[{"text": "✅ Create alert", "callback_data": "ok"}],
+                      [{"text": "◀ Change dates", "callback_data": "back:dates"}],
                       [{"text": "✖ Cancel", "callback_data": "x"}]])
 
     def _save(self, chat_id: str, message_id: int) -> None:
@@ -555,6 +639,10 @@ class Bot:
                               keyboard=self._menu_keyboard())
         if data == "ok":
             return self._save(chat_id, message_id)
+        if data == "back:dates":
+            sess.step = "dates"
+            text, rows = self._date_rows(sess)
+            return self._edit(chat_id, message_id, text, keyboard=rows)
 
         head, _, tail = data.partition(":")
 
@@ -578,13 +666,11 @@ class Bot:
         elif head == "th":
             if tail == "all":
                 sess.theatres = []
-                sess.step = "dates"
-                text, rows = self._date_rows(sess)
-                return self._edit(chat_id, message_id, text, keyboard=rows)
+                sess.step = "times"
+                return self._show_times(chat_id, message_id)
             if tail == "done":
-                sess.step = "dates"
-                text, rows = self._date_rows(sess)
-                return self._edit(chat_id, message_id, text, keyboard=rows)
+                sess.step = "times"
+                return self._show_times(chat_id, message_id)
             if tail.isdigit() and int(tail) < len(sess.venues):
                 venue = sess.venues[int(tail)]
                 if venue in sess.theatres:
@@ -595,11 +681,9 @@ class Bot:
         elif head == "dt":
             if tail == "any":
                 sess.dates = []
-                sess.step = "times"
-                return self._show_times(chat_id, message_id)
+                return self._load_venues(chat_id, message_id)
             if tail == "done":
-                sess.step = "times"
-                return self._show_times(chat_id, message_id)
+                return self._load_venues(chat_id, message_id)
             if tail.isdigit() and int(tail) < len(sess.dates_available):
                 code = sess.dates_available[int(tail)]
                 if code in sess.dates:

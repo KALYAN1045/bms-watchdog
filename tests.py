@@ -834,14 +834,14 @@ class TestBotFlow(unittest.TestCase):
     def test_full_flow_creates_a_watch(self):
         self.location(17.44, 78.35)              # → nearest cities
         self.click(self.tg.press("Hyderabad"))   # → city set, movie list appears
-        self.click(self.tg.press("Paradise"))    # → theatres for that movie
-        self.assertIn("Which theatres", self.tg.last_text())
-
-        # select a specific theatre, finish, then take any date
-        self.click(self.tg.press("AMB"))
-        self.click(self.tg.press("Done"))
+        self.click(self.tg.press("Paradise"))    # → dates come first
         self.assertIn("Which dates", self.tg.last_text())
         self.click(self.tg.press("Any date"))
+
+        # theatres are listed for the dates just chosen
+        self.assertIn("Which theatres", self.tg.last_text())
+        self.click(self.tg.press("AMB"))
+        self.click(self.tg.press("Done"))
 
         # the timings step
         self.assertIn("Which show timings", self.tg.last_text())
@@ -868,8 +868,8 @@ class TestBotFlow(unittest.TestCase):
         for movie in ("Paradise", "Devara"):
             self.text("/add")
             self.click(self.tg.press(movie))
-            self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press("Any date"))
+            self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press("Any time"))
             self.click("ok")
         self.assertEqual(len(self.store.watches(self.chat)), 2)
@@ -886,8 +886,8 @@ class TestBotFlow(unittest.TestCase):
         for _ in range(2):
             self.text("/add")
             self.click(self.tg.press("Paradise"))
-            self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press("Any date"))
+            self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press("Any time"))
             self.click("ok")
         self.assertEqual(len(self.store.watches(self.chat)), 1)
@@ -899,8 +899,8 @@ class TestBotFlow(unittest.TestCase):
         for slot in ("Morning", "Night"):
             self.text("/add")
             self.click(self.tg.press("Paradise"))
-            self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press("Any date"))
+            self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press(slot))
             self.click(self.tg.press("Done"))
             self.click("ok")
@@ -913,8 +913,8 @@ class TestBotFlow(unittest.TestCase):
         self.click(self.tg.press("Hyderabad"))
         self.text("/add")
         self.click(self.tg.press("Paradise"))
-        self.click(self.tg.press("Any theatre"))
         self.click(self.tg.press("Any date"))
+        self.click(self.tg.press("Any theatre"))
         self.click(self.tg.press("Evening"))
         self.click(self.tg.press("Done"))
         self.click("ok")
@@ -927,8 +927,8 @@ class TestBotFlow(unittest.TestCase):
         self.click(self.tg.press("Hyderabad"))
         self.text("/add")
         self.click(self.tg.press("Paradise"))
-        self.click(self.tg.press("Any theatre"))
         self.click(self.tg.press("Any date"))
+        self.click(self.tg.press("Any theatre"))
         self.click(self.tg.press("Any time"))
         self.click("ok")
         watch_id = self.store.watches(self.chat)[0]["id"]
@@ -937,6 +937,49 @@ class TestBotFlow(unittest.TestCase):
         self.click(f"rm:{watch_id}")
         self.assertEqual(self.store.watches(self.chat), [])
         self.assertTrue(self.changes, "removal must tell the runner to reload")
+
+    def test_theatres_are_listed_for_the_dates_chosen(self):
+        """The old flow asked for theatres first and listed them from one
+        arbitrary date, so you could pick a cinema with no shows on your
+        dates and the alert would silently never match."""
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        self.click(self.tg.press("Paradise"))
+        self.assertIn("Which dates", self.tg.last_text())      # dates first
+        self.click(self.tg.press("Any date"))
+        self.assertIn("Which theatres", self.tg.last_text())
+        labels = [b["text"] for b in self.tg.buttons()]
+        self.assertTrue(any("AMB" in l for l in labels))
+
+    def test_confirm_reports_how_many_shows_already_match(self):
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        self.click(self.tg.press("Paradise"))
+        self.click(self.tg.press("Any date"))
+        self.click(self.tg.press("Any theatre"))
+        self.click(self.tg.press("Any time"))
+        self.assertIn("already match", self.tg.last_text())
+
+    def test_confirm_warns_when_the_timings_exclude_everything(self):
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        self.click(self.tg.press("Paradise"))
+        self.click(self.tg.press("Any date"))
+        self.click(self.tg.press("Any theatre"))
+        # fixture shows are 09:30, 18:00 and 22:50 — nothing in the afternoon
+        self.click(self.tg.press("Afternoon"))
+        self.click(self.tg.press("Done"))
+        self.assertIn("No show matches your timings yet", self.tg.last_text())
+
+    def test_confirm_offers_a_way_back_to_dates(self):
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        self.click(self.tg.press("Paradise"))
+        self.click(self.tg.press("Any date"))
+        self.click(self.tg.press("Any theatre"))
+        self.click(self.tg.press("Any time"))
+        self.click(self.tg.press("Change dates"))
+        self.assertIn("Which dates", self.tg.last_text())
 
     def test_ack_button_is_recorded_for_the_scheduler(self):
         self.click("ack:some-watch")

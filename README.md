@@ -104,12 +104,20 @@ Pick a movie  (32 listed)
   ↓
 
 🎬 The Paradise
-Which theatres? Tap to select, or choose Any theatre.
+Which dates?
+[ ▫️ Thu 25 Sep ]  [ ▫️ Fri 26 Sep ]  …
+[ 📅 Any date ]  [ ✔ Done (2) ]
+
+  ↓   theatres are then listed for those dates
+
+🎬 The Paradise
+📅 Fri 26 Sep, Sat 27 Sep
+Which theatres? 48 showing it on those dates.
 [ ☑️ AMB Cinemas: Gachibowli ]
 [ ▫️ Prasads Multiplex: Hyderabad ]
 [ 🏛 Any theatre ]  [ ✔ Done (1) ]
 
-  ↓  then dates, then:
+  ↓
 
 Which show timings?
 Pick as many as you like.
@@ -122,6 +130,13 @@ Pick as many as you like.
 
   ↓
 
+Create this alert?
+🎬 The Paradise · 🏛 AMB Cinemas · 📅 26–27 Sep · 🕐 Evening, Night
+✅ 6 show(s) already match (6 with seats).
+[ ✅ Create alert ]  [ ◀ Change dates ]  [ ✖ Cancel ]
+
+  ↓
+
 ✅ Watching The Paradise
 Add as many as you like — /add for another, /list to manage them.
 ```
@@ -131,6 +146,16 @@ nearest match), lists what's actually showing there with real titles, and
 offers the real theatre names pulled live for that film. For a movie whose
 booking hasn't opened, there are no theatres to list yet — it says so and
 watches all of them.
+
+**Dates are asked before theatres, deliberately.** A cinema that screens a
+film on Thursday may not on Saturday, so the theatre list is built from the
+dates you actually picked — otherwise you can select a cinema that has no
+shows on your dates and the alert quietly never matches.
+
+The confirm screen then tells you how many shows match **right now**, and if
+none do, which filter is responsible — the theatre, or the timings. Zero is a
+perfectly good answer when booking hasn't opened; it just shouldn't be a
+surprise.
 
 Show timings are the last filter, and they matter more than they look: on a
 big release a single day can carry 200+ shows across the city. Picking
