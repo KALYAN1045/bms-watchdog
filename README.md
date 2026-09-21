@@ -123,63 +123,65 @@ source .env
 
 ## 2. Run it somewhere that stays on
 
-Because there's no browser, the footprint is tiny — roughly 40 MB of RAM and a
-fraction of a CPU. Anything works.
+The process needs roughly **40 MB of RAM** and a fraction of a CPU. That fits
+inside free tiers that are free *forever*, not free-for-12-months.
 
-### Your Android phone, via Termux
+### Oracle Cloud Always Free — recommended
 
-Genuinely viable now, and free. One wrinkle: `curl_cffi` ships Linux (glibc)
-wheels, and Termux is Android/bionic — so install inside a Debian container,
-which `proot-distro` makes a one-liner. No root needed.
+The only mainstream provider giving a permanently free VM in **India**
+(Mumbai and Hyderabad regions), which also means a local IP and low latency.
 
-```bash
-# in Termux
-pkg update -y && pkg install -y proot-distro
-proot-distro install debian
-proot-distro login debian
-```
-```bash
-# now inside Debian
-apt update && apt install -y python3 python3-venv git
-git clone <your-repo> ~/bms-watchdog && cd ~/bms-watchdog
-python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
-# copy your .env and watchlist.yaml across, then:
-./venv/bin/python watch.py doctor
-nohup ./venv/bin/python watch.py run >> watchdog.log 2>&1 &
-```
+| | |
+|---|---|
+| Cost | ₹0/month, no expiry |
+| Machine | `VM.Standard.E2.1.Micro` — 1 GB RAM, 1/8 OCPU. You get two |
+| Signup | Card required for identity verification; Always Free resources are never charged |
+| Catch | The bigger ARM (Ampere A1) shapes are often out of capacity. Don't bother — the AMD micro is 25× more than this needs |
 
-Three things Android will otherwise do to you:
-
-* **Doze will suspend it.** Install Termux:API (`pkg install termux-api`) and
-  run `termux-wake-lock` before starting.
-* **Battery optimisation will kill it.** Android Settings → Apps → Termux →
-  Battery → *Unrestricted*.
-* **A reboot ends it.** Install the **Termux:Boot** addon and put a startup
-  script in `~/.termux/boot/`.
-
-Keep the phone charging — a poll every 60 s is light, but 24/7 wakelock isn't
-free. An old spare phone plugged in on a shelf is the ideal version of this.
-
-I could not test the Termux path from your Mac, so treat these steps as
-carefully-researched rather than verified — `watch.py doctor` will confirm it
-in one command on the phone.
-
-### A VPS or Raspberry Pi
+1. Sign up at `cloud.oracle.com`, choosing **Mumbai** or **Hyderabad** as your
+   home region (this cannot be changed later).
+2. Create a Compute instance: image **Ubuntu 22.04**, shape
+   **VM.Standard.E2.1.Micro** (it's labelled *Always Free eligible*).
+3. Save the SSH private key it offers you — that's your only copy.
+4. From your Mac:
 
 ```bash
-bash scripts/deploy.sh user@your-server
+bash scripts/deploy.sh ubuntu@<your-instance-ip>
 ```
 
-Syncs the folder, builds the image, runs `doctor` as a gate, and starts it
-detached. The image is now plain `python:3.12-slim`. A Pi at home is the
-lowest-risk option because it's a residential IP; Oracle Cloud's Always Free
-tier is the ₹0 cloud option and the image builds on its ARM instances.
-
-Or without Docker at all — it's just a Python process:
+That syncs the folder, creates a venv, runs `doctor` as a gate, and installs a
+**systemd service** that starts at boot and restarts on crash. No Docker, no
+browser — about 40 MB resident.
 
 ```bash
-./venv/bin/python watch.py run
+ssh ubuntu@<ip> 'journalctl -u bms-watchdog -f'      # live logs
+ssh ubuntu@<ip> 'sudo systemctl restart bms-watchdog'
 ```
+
+Re-run `deploy.sh` any time you change the watchlist.
+
+### Google Cloud Always Free
+
+Same idea — one `e2-micro` free forever — but only in `us-west1`,
+`us-central1` or `us-east1`. That's a US datacenter IP, which Cloudflare may
+rate worse than an Indian one. `doctor` tells you in 30 seconds, so it's a
+cheap thing to try if Oracle's signup gives you trouble.
+
+### Any other Linux box
+
+The deploy script has no Oracle-specific parts — a Raspberry Pi at home, an
+old laptop running Linux, or a ₹350/month Hetzner VPS all work identically.
+A Pi is the best of all for Cloudflare, because it's a residential IP.
+
+There's also a `Dockerfile` and `docker-compose.yml` if you'd rather run it
+containerised, though on a 1 GB box systemd is the lighter choice.
+
+### GitHub Actions — zero signup, but laggy
+
+`.github/workflows/watch.yml` runs on GitHub's free minutes with no card at
+all. The catch is timing: GitHub's cron has a 5-minute floor and is routinely
+5–20 minutes late. Fine as a backstop or for a quiet re-release; not for a
+first-day-first-show scramble.
 
 ### Your Mac
 
@@ -187,15 +189,29 @@ Or without Docker at all — it's just a Python process:
 bash scripts/install-launchd.sh
 ```
 
-Starts at login, restarts on crash, logs to `logs/watchdog.log`. Only runs
-while the Mac is awake — closing the lid stops it. Undo with
-`launchctl unload ~/Library/LaunchAgents/com.bmswatch.watchdog.plist`.
+Starts at login, restarts on crash. Only runs while the Mac is awake — closing
+the lid stops it.
 
-### GitHub Actions
+### Android / Termux — possible, but I'd skip it
 
-`.github/workflows/watch.yml` runs a check on a schedule for free. The catch
-is timing, not access: GitHub's cron has a 5-minute floor and is routinely
-5–20 minutes late. A backstop, not a way to win a first-day scramble.
+It would run, but it's the one option I could not verify, and the failure mode
+is silent. `curl_cffi` publishes Android wheels, but only under CPython's
+official `android_*` platform tags; Termux's Python reports `linux_aarch64`
+instead, so pip probably won't match them and will attempt a source build that
+needs a C library with no Termux build. The workaround is a Debian container
+via `proot-distro`, where the normal Linux wheels apply:
+
+```bash
+pkg install -y proot-distro && proot-distro install debian
+proot-distro login debian
+# then the ordinary Linux install
+```
+
+Even when that works, Android will fight you: Doze suspends the process
+(needs `termux-wake-lock`), battery optimisation kills it (set Termux to
+*Unrestricted*), and a reboot ends it (needs the Termux:Boot addon). For
+something whose whole job is firing reliably at an unpredictable minute, a
+free VM is a much better bet.
 
 ---
 
