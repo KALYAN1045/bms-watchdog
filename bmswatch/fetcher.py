@@ -149,6 +149,8 @@ class HTTPSession(_BaseSession):
         self._session = None
 
     def start(self) -> None:
+        if self._session is not None:
+            return                       # make_session may have started us already
         try:
             from curl_cffi import requests as cr
         except ImportError as exc:                       # pragma: no cover

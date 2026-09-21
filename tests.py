@@ -239,6 +239,32 @@ class TestStateAndAlert(unittest.TestCase):
         self.assertIn("&lt;b&gt;Cinema&lt;/b&gt; &amp; Co", html)
 
 
+class TestFetcher(unittest.TestCase):
+    def test_start_is_idempotent(self):
+        """make_session starts a session to probe it; the pool starts it again."""
+        from bmswatch.fetcher import HTTPSession
+        s = HTTPSession(city="hyderabad")
+        s.start()
+        first = s._session
+        s.start()
+        self.assertIs(s._session, first)
+        s.close()
+        self.assertIsNone(s._session)
+
+    def test_showtimes_url_carries_the_filters(self):
+        from bmswatch.fetcher import showtimes_url
+        url = showtimes_url("ET001", "20260925", "HYD", "1.2.3", "17.4", "78.5")
+        for expected in ("eventCode=ET001", "dateCode=20260925",
+                         "regionCode=HYD", "subRegion=HYD"):
+            self.assertIn(expected, url)
+
+    def test_browser_options_dropped_for_http_engine(self):
+        from bmswatch.fetcher import HTTPSession, make_session
+        s = make_session(engine="http", city="hyderabad", channel="chrome",
+                         window="minimized", profile_dir="/tmp/nope")
+        self.assertIsInstance(s, HTTPSession)
+
+
 class TestTelegram(unittest.TestCase):
     def _telegram(self):
         from bmswatch.config import TelegramConfig
