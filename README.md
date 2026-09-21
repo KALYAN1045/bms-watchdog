@@ -61,17 +61,23 @@ or tabs.
 
 ### Make a Telegram bot
 
-1. In Telegram, message **@BotFather** → `/newbot` → pick a name. It replies
-   with a token like `8012345678:AAE...`.
-2. Message **your own new bot** — say anything. A bot cannot message you until
-   you message it first.
-3. Get your chat id:
+1. In Telegram, message **@BotFather** → `/newbot` → pick a name (the username
+   must end in `bot`). It replies with a token like `8012345678:AAE...`.
+2. Paste that token into `.env` in this folder:
 
-```bash
-curl -s "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates" | grep -o '"id":[0-9-]*' | head -1
-```
+   ```
+   TELEGRAM_BOT_TOKEN=8012345678:AAE...
+   ```
 
-4. `cp .env.example .env` and put both values in it.
+3. Let the setup command do the rest:
+
+   ```bash
+   ./venv/bin/python watch.py telegram-setup
+   ```
+
+   It validates the token, waits for you to press **Start** in Telegram,
+   discovers your chat id, writes it to `.env`, and sends a confirmation
+   message. Your token is never printed — not even inside error messages.
 
 ### Find your movie and your theatres
 

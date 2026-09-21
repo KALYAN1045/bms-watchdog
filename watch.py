@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """BookMyShow ticket watchdog -- CLI entry point.
 
+  python watch.py telegram-setup              connect Telegram, find your chat id
   python watch.py doctor                      check the setup end to end
   python watch.py movies --query paradise     find a movie's event code
   python watch.py theatres --event ET00436621 list exact theatre names
@@ -12,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import signal
 import sys
@@ -158,6 +160,115 @@ def cmd_test_alert(args) -> int:
         "https://in.bookmyshow.com/explore/movies-hyderabad",
     )
     print("Done. If nothing arrived, run: python watch.py doctor")
+    return 0
+
+
+BOTFATHER_STEPS = """
+Telegram bot setup — three steps, about two minutes:
+
+  1. In Telegram, open a chat with  @BotFather
+  2. Send  /newbot  and follow the prompts (any name, username must end in 'bot').
+     It replies with a token that looks like  8012345678:AAE...
+  3. Put that token in the .env file in this folder:
+
+         TELEGRAM_BOT_TOKEN=8012345678:AAE...
+
+     (No quotes, no 'export'. Create the file from .env.example if it's missing.)
+
+Then run this command again — it finds your chat id and tests the alert for you.
+The token stays in that file; nothing prints it.
+"""
+
+
+def _write_env_value(env_path: Path, key: str, value: str) -> None:
+    """Set key=value in .env, leaving every other line untouched."""
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    out, replaced = [], False
+    for line in lines:
+        if line.strip().startswith(f"{key}=") or line.strip().startswith(f"export {key}="):
+            out.append(f"{key}={value}")
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        out.append(f"{key}={value}")
+    env_path.write_text("\n".join(out).rstrip() + "\n")
+
+
+def cmd_telegram_setup(args) -> int:
+    from bmswatch.notify import Telegram, redact
+    from bmswatch.config import TelegramConfig
+
+    env_path = ROOT / ".env"
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token and env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip().removeprefix("export ").strip()
+            if line.startswith("TELEGRAM_BOT_TOKEN="):
+                token = line.split("=", 1)[1].strip().strip("\"'")
+
+    if not token:
+        print(BOTFATHER_STEPS)
+        return 1
+
+    tg = Telegram(TelegramConfig(bot_token=token, chat_id=""))
+    try:
+        me = tg._call("getMe")
+    except Exception as exc:
+        print(f"That token was rejected: {redact(exc, token)}")
+        print("Check you copied the whole thing from BotFather, including the part "
+              "before the colon.")
+        return 1
+
+    username = me.get("username", "?")
+    print(f"Bot is live: @{username}")
+
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if chat_id and not args.force:
+        print(f"Already have chat id {chat_id} — skipping discovery (use --force to redo).")
+    else:
+        print(f"\nNow open Telegram, go to  @{username},  and press Start "
+              "(or send it any message).")
+        print(f"Waiting up to {args.wait}s for that message…", flush=True)
+
+        deadline = time.time() + args.wait
+        chat_id = ""
+        offset = None
+        while time.time() < deadline and not chat_id:
+            try:
+                kwargs = {"timeout": 20}
+                if offset is not None:
+                    kwargs["offset"] = offset
+                updates = tg._call("getUpdates", **kwargs) or []
+            except Exception as exc:
+                print(f"  …{redact(exc, token)}", flush=True)
+                time.sleep(3)
+                continue
+            for update in updates:
+                offset = update["update_id"] + 1
+                message = update.get("message") or update.get("edited_message") or {}
+                chat = message.get("chat") or {}
+                if chat.get("id"):
+                    chat_id = str(chat["id"])
+                    who = chat.get("first_name") or chat.get("username") or "you"
+                    print(f"Got it — message from {who}, chat id {chat_id}")
+                    break
+
+        if not chat_id:
+            print("\nNo message arrived. A bot can't message you until you message "
+                  "it first, so that Start really is required.")
+            print(f"Open Telegram → search @{username} → Start, then run this again.")
+            return 1
+
+    _write_env_value(env_path, "TELEGRAM_BOT_TOKEN", token)
+    _write_env_value(env_path, "TELEGRAM_CHAT_ID", chat_id)
+    print(f"Saved both values to {env_path.name}")
+
+    tg.cfg.chat_id = chat_id
+    tg.send("✅ <b>bms-watchdog is connected.</b>\n\nThis is where your ticket "
+            "alerts will arrive.", silent=False)
+    print("Sent a confirmation message — check Telegram.")
+    print("\nNext:  source .env && ./venv/bin/python watch.py test-alert")
     return 0
 
 
@@ -312,6 +423,13 @@ def main() -> int:
     add("check", "run one pass and exit").set_defaults(func=cmd_check)
     add("run", "poll continuously").set_defaults(func=cmd_run)
     add("test-alert", "send a fake alert").set_defaults(func=cmd_test_alert)
+
+    p_tg = add("telegram-setup", "connect a Telegram bot and find your chat id")
+    p_tg.add_argument("--wait", type=int, default=180,
+                      help="seconds to wait for your first message (default 180)")
+    p_tg.add_argument("--force", action="store_true",
+                      help="re-discover the chat id even if one is already set")
+    p_tg.set_defaults(func=cmd_telegram_setup)
 
     p_movies = add("movies", "find a movie's ET-code")
     p_movies.add_argument("-q", "--query", default="")

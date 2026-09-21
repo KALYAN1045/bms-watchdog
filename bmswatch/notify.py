@@ -14,6 +14,11 @@ import requests
 from .config import DesktopConfig, TelegramConfig
 
 TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
+
+
+def redact(text: str, token: str) -> str:
+    """Telegram puts the token in the URL, so it turns up in network errors."""
+    return str(text).replace(token, "<token>") if token else str(text)
 _ACK_WORDS = {"ack", "ok", "okay", "got it", "stop", "/ack", "/stop"}
 
 
@@ -27,8 +32,13 @@ class Telegram:
 
     def _call(self, method: str, **payload):
         url = TELEGRAM_API.format(token=self.cfg.bot_token, method=method)
-        res = requests.post(url, json=payload, timeout=self.timeout)
-        data = res.json()
+        try:
+            res = requests.post(url, json=payload, timeout=self.timeout)
+            data = res.json()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Telegram {method} failed: "
+                f"{redact(exc, self.cfg.bot_token)}") from None
         if not data.get("ok"):
             raise RuntimeError(f"Telegram {method} failed: {data.get('description')}")
         return data.get("result")
