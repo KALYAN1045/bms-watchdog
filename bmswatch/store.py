@@ -107,13 +107,15 @@ class WatchStore:
         return True
 
     def duplicate_of(self, chat_id: Any, event_code: str, theatres: List[str],
-                     dates: List[str], slots: Optional[List[str]] = None) -> Optional[str]:
+                     dates: List[str], slots: Optional[List[str]] = None,
+                     categories: Optional[List[str]] = None) -> Optional[str]:
         """Existing watch with the same movie, theatres, dates and timings."""
         slots = slots or []
         for w in self.watches(chat_id):
             if (w.get("event_code") == event_code
                     and sorted(w.get("theatres") or []) == sorted(theatres)
                     and sorted(w.get("dates") or []) == sorted(dates)
-                    and sorted(w.get("slots") or []) == sorted(slots)):
+                    and sorted(w.get("slots") or []) == sorted(slots)
+                    and sorted(w.get("categories") or []) == sorted(categories or [])):
                 return w.get("id")
         return None

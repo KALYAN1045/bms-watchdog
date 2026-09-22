@@ -55,7 +55,16 @@ def matches(watch: Watch, show: Show) -> bool:
     if watch.languages and not _contains_any(show.language, watch.languages):
         return False
 
-    if watch.require_seats and show.seats_avail < watch.min_seats:
+    if watch.categories:
+        # watching a specific seat block (e.g. a blocked-off centre section):
+        # it only counts once that block itself has seats
+        blocks = [c for c in show.categories
+                  if _contains_any(c.desc, watch.categories)]
+        if not blocks:
+            return False
+        if not any(c.seats_avail >= max(1, watch.min_seats) for c in blocks):
+            return False
+    elif watch.require_seats and show.seats_avail < watch.min_seats:
         return False
 
     if watch.windows:

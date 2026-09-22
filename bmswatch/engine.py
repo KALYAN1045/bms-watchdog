@@ -165,9 +165,16 @@ def build_alert(watch: Watch, result: CheckResult) -> tuple[str, str, str, str]:
             for show in venue_shows:
                 if shown >= MAX_SHOWS_IN_MESSAGE:
                     continue
-                seats = f" · {show.seats_avail} seats" if show.seats_avail else ""
-                if show.sold_out:
-                    seats = " · sold out"
+                if watch.categories:
+                    # watching a specific block: report that block, not the total
+                    blocks = [c for c in show.categories
+                              if any(n.lower() in c.desc.lower() for n in watch.categories)]
+                    seats = "".join(f" · {c.desc} {c.seats_avail}/{c.max_seats} seats"
+                                    for c in blocks)
+                else:
+                    seats = f" · {show.seats_avail} seats" if show.seats_avail else ""
+                    if show.sold_out:
+                        seats = " · sold out"
                 lines_html.append(f"   • {esc(show.label)}{esc(_price(show))}{esc(seats)}")
                 lines_plain.append(f"  {show.label}{_price(show)}{seats}")
                 shown += 1

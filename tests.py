@@ -48,10 +48,16 @@ def payload(date="20260925", venues=None):
                         {"ShowTime": "09:30 AM", "ShowDateCode": date, "EventCode": "ET002",
                          "Attributes": "IMAX", "Availability": "A", "MinPrice": "390",
                          "MaxPrice": "449",
-                         "Categories": [{"SeatsAvail": "120"}, {"SeatsAvail": "30"}]},
+                         "Categories": [
+                             {"PriceDesc": "GOLD", "CurPrice": "390",
+                              "SeatsAvail": "120", "MaxSeats": "226"},
+                             {"PriceDesc": "PLATINUM", "CurPrice": "449",
+                              "SeatsAvail": "30", "MaxSeats": "40"}]},
                         {"ShowTime": "10:50 PM", "ShowDateCode": date, "EventCode": "ET001",
                          "Attributes": "", "Availability": "S", "MinPrice": "190",
-                         "MaxPrice": "190", "Categories": [{"SeatsAvail": "0"}]},
+                         "MaxPrice": "190",
+                         "Categories": [{"PriceDesc": "GOLD", "CurPrice": "190",
+                                         "SeatsAvail": "0", "MaxSeats": "226"}]},
                     ],
                 },
                 {
@@ -60,7 +66,12 @@ def payload(date="20260925", venues=None):
                     "ShowTimes": [
                         {"ShowTime": "06:00 PM", "ShowDateCode": date, "EventCode": "ET003",
                          "Attributes": "", "Availability": "A", "MinPrice": "150",
-                         "MaxPrice": "150", "Categories": [{"SeatsAvail": "88"}]},
+                         "MaxPrice": "150",
+                         "Categories": [
+                             {"PriceDesc": "GOLD", "CurPrice": "150",
+                              "SeatsAvail": "88", "MaxSeats": "226"},
+                             {"PriceDesc": "DIRECTOR CHOICE", "CurPrice": "449",
+                              "SeatsAvail": "0", "MaxSeats": "14"}]},
                     ],
                 },
                 {
@@ -182,6 +193,53 @@ class TestMatching(unittest.TestCase):
 
     def test_empty_filters_match_everything(self):
         self.assertEqual(len(filter_shows(watch(), self.shows)), 3)
+
+
+class TestSeatBlocks(unittest.TestCase):
+    """Cinemas hold back the good centre rows and release them later; the
+    whole point is to be told the moment that happens."""
+
+    def setUp(self):
+        self.shows = parse_showtimes(payload(), "ET00436621", "20260925").shows
+
+    def test_categories_are_parsed(self):
+        imax = self.shows[0]
+        self.assertEqual([c.desc for c in imax.categories], ["GOLD", "PLATINUM"])
+        self.assertEqual(imax.category("platinum").seats_avail, 30)
+        self.assertEqual(imax.category("platinum").max_seats, 40)
+
+    def test_held_back_block_does_not_match(self):
+        """DIRECTOR CHOICE is 0 of 14 on the 6pm show — must not alert."""
+        got = filter_shows(watch(categories=["DIRECTOR CHOICE"]), self.shows)
+        self.assertEqual(got, [])
+
+    def test_block_with_seats_matches(self):
+        got = filter_shows(watch(categories=["PLATINUM"]), self.shows)
+        self.assertEqual([s.time for s in got], ["09:30 AM"])
+
+    def test_block_match_is_partial_and_case_insensitive(self):
+        self.assertEqual(len(filter_shows(watch(categories=["director"]), self.shows)), 0)
+        self.assertEqual(len(filter_shows(watch(categories=["gold"]), self.shows)), 2)
+
+    def test_min_seats_applies_to_the_block(self):
+        self.assertEqual(len(filter_shows(watch(categories=["PLATINUM"],
+                                                min_seats=30), self.shows)), 1)
+        self.assertEqual(len(filter_shows(watch(categories=["PLATINUM"],
+                                                min_seats=31), self.shows)), 0)
+
+    def test_show_without_that_block_is_excluded(self):
+        got = filter_shows(watch(categories=["PLATINUM"]), self.shows)
+        self.assertTrue(all(s.category("platinum") for s in got))
+
+    def test_alert_reports_the_block_not_the_total(self):
+        from bmswatch.engine import CheckResult, build_alert
+        snap = parse_showtimes(payload(), "ET00436621", "20260925")
+        w = watch(categories=["PLATINUM"])
+        matched = filter_shows(w, snap.shows)
+        _, html, plain, _ = build_alert(w, CheckResult(
+            "w", "open", "", matched=matched, fresh=matched, snapshot=snap))
+        self.assertIn("PLATINUM 30/40 seats", plain)
+        self.assertNotIn("150 seats", plain)      # not the all-category total
 
 
 class TestConfig(unittest.TestCase):
@@ -920,6 +978,10 @@ class TestBotFlow(unittest.TestCase):
         self.click(self.tg.press("Evening"))
         self.click(self.tg.press("Night"))
         self.click(self.tg.press("Done"))
+
+        # the seat-block step
+        self.assertIn("Which seat block", self.tg.last_text())
+        self.click(self.tg.press("Any seats"))
         self.assertIn("Create this alert", self.tg.last_text())
         self.assertIn("Evening", self.tg.last_text())
         self.click("ok")
@@ -943,6 +1005,7 @@ class TestBotFlow(unittest.TestCase):
             self.click(self.tg.press("Any date"))
             self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press("Any time"))
+            self.click(self.tg.press("Any seats"))
             self.click("ok")
         self.assertEqual(len(self.store.watches(self.chat)), 2)
 
@@ -961,6 +1024,7 @@ class TestBotFlow(unittest.TestCase):
             self.click(self.tg.press("Any date"))
             self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press("Any time"))
+            self.click(self.tg.press("Any seats"))
             self.click("ok")
         self.assertEqual(len(self.store.watches(self.chat)), 1)
         self.assertIn("already have an identical", self.tg.last_text())
@@ -975,6 +1039,7 @@ class TestBotFlow(unittest.TestCase):
             self.click(self.tg.press("Any theatre"))
             self.click(self.tg.press(slot))
             self.click(self.tg.press("Done"))
+            self.click(self.tg.press("Any seats"))
             self.click("ok")
         saved = self.store.watches(self.chat)
         self.assertEqual(len(saved), 2)
@@ -989,6 +1054,7 @@ class TestBotFlow(unittest.TestCase):
         self.click(self.tg.press("Any theatre"))
         self.click(self.tg.press("Evening"))
         self.click(self.tg.press("Done"))
+        self.click(self.tg.press("Any seats"))
         self.click("ok")
         self.text("/list")
         self.assertIn("Evening", self.tg.last_text())
@@ -1002,6 +1068,7 @@ class TestBotFlow(unittest.TestCase):
         self.click(self.tg.press("Any date"))
         self.click(self.tg.press("Any theatre"))
         self.click(self.tg.press("Any time"))
+        self.click(self.tg.press("Any seats"))
         self.click("ok")
         watch_id = self.store.watches(self.chat)[0]["id"]
 
@@ -1030,6 +1097,7 @@ class TestBotFlow(unittest.TestCase):
         self.click(self.tg.press("Any date"))
         self.click(self.tg.press("Any theatre"))
         self.click(self.tg.press("Any time"))
+        self.click(self.tg.press("Any seats"))
         self.assertIn("already match", self.tg.last_text())
 
     def test_confirm_warns_when_the_timings_exclude_everything(self):
@@ -1041,6 +1109,7 @@ class TestBotFlow(unittest.TestCase):
         # fixture shows are 09:30, 18:00 and 22:50 — nothing in the afternoon
         self.click(self.tg.press("Afternoon"))
         self.click(self.tg.press("Done"))
+        self.click(self.tg.press("Any seats"))
         self.assertIn("No show matches your timings yet", self.tg.last_text())
 
     def test_confirm_offers_a_way_back_to_dates(self):
@@ -1050,8 +1119,50 @@ class TestBotFlow(unittest.TestCase):
         self.click(self.tg.press("Any date"))
         self.click(self.tg.press("Any theatre"))
         self.click(self.tg.press("Any time"))
+        self.click(self.tg.press("Any seats"))
         self.click(self.tg.press("Change dates"))
         self.assertIn("Which dates", self.tg.last_text())
+
+    def test_seat_block_step_marks_a_fully_held_block(self):
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        self.click(self.tg.press("Paradise"))
+        self.click(self.tg.press("Any date"))
+        self.click(self.tg.press("Any theatre"))
+        self.click(self.tg.press("Any time"))
+        self.assertIn("Which seat block", self.tg.last_text())
+        labels = [b["text"] for b in self.tg.buttons()]
+        director = [l for l in labels if "DIRECTOR" in l]
+        self.assertTrue(director, f"no DIRECTOR CHOICE button in {labels}")
+        self.assertIn("held back", director[0])
+
+    def test_watching_a_held_block_saves_and_explains(self):
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        self.click(self.tg.press("Paradise"))
+        self.click(self.tg.press("Any date"))
+        self.click(self.tg.press("Any theatre"))
+        self.click(self.tg.press("Any time"))
+        self.click(self.tg.press("DIRECTOR"))
+        self.click(self.tg.press("Done"))
+        self.assertIn("held back right now", self.tg.last_text())
+        self.click("ok")
+        saved = self.store.watches(self.chat)[0]
+        self.assertEqual(saved["categories"], ["DIRECTOR CHOICE"])
+
+    def test_same_show_different_seat_block_is_not_a_duplicate(self):
+        self.location(17.44, 78.35)
+        self.click(self.tg.press("Hyderabad"))
+        for block in ("GOLD", "DIRECTOR"):
+            self.text("/add")
+            self.click(self.tg.press("Paradise"))
+            self.click(self.tg.press("Any date"))
+            self.click(self.tg.press("Any theatre"))
+            self.click(self.tg.press("Any time"))
+            self.click(self.tg.press(block))
+            self.click(self.tg.press("Done"))
+            self.click("ok")
+        self.assertEqual(len(self.store.watches(self.chat)), 2)
 
     def test_ack_button_is_recorded_for_the_scheduler(self):
         self.click("ack:some-watch")

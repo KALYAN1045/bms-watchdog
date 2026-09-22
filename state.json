@@ -1,8 +1,17 @@
 {
+ "demo-paradise": {
+  "alerted": [
+   "20260925|ACAS|07:30 PM|ET00436621",
+   "20260925|ACAS|10:50 PM|ET00436621"
+  ],
+  "event_code": null,
+  "last_check": 1790010112,
+  "last_result": "open"
+ },
  "the-paradise-hyd": {
   "alerted": [],
   "event_code": null,
-  "last_check": 1790009865,
+  "last_check": 1790050484,
   "last_result": "no_match"
  }
 }

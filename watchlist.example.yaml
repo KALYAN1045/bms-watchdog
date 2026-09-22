@@ -62,6 +62,8 @@ watches:
     event_code: ET00436621
     theatres: [Prasads]
     time_between: ["18:00", "23:59"]   # exact range, instead of named slots
+    categories: [PLATINUM]       # only this seat block — for centre rows the
+                                 # cinema is holding back; omit to watch any
     require_seats: true
     min_seats: 3
     enabled: false

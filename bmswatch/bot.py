@@ -51,6 +51,8 @@ class Session:
     dates_available: List[str] = field(default_factory=list)
     dates: List[str] = field(default_factory=list)
     slots: List[str] = field(default_factory=list)
+    categories: List[str] = field(default_factory=list)
+    categories_available: List[str] = field(default_factory=list)
     booking_open: bool = False
     touched: float = field(default_factory=time.time)
 
@@ -352,6 +354,7 @@ class Bot:
         sess.theatres = []
         sess.dates = []
         sess.slots = []
+        sess.categories = []
         sess.venues = []
         sess.shows_by_date = {}
         city = self._city(chat_id)
@@ -491,6 +494,64 @@ class Bot:
         text, rows = self._time_rows(self.session(chat_id))
         self._edit(chat_id, message_id, text, keyboard=rows)
 
+    def _seat_blocks(self, sess: Session) -> List[str]:
+        """Distinct price blocks across the shows that match so far."""
+        names, seen = [], set()
+        for day in sess.shows_by_date.values():
+            for show in day:
+                if sess.theatres and not any(t.lower() in show.venue.lower()
+                                             for t in sess.theatres):
+                    continue
+                for cat in show.categories:
+                    key = cat.desc.upper()
+                    if key not in seen:
+                        seen.add(key)
+                        names.append(cat.desc)
+        return names
+
+    def _seat_rows(self, sess: Session) -> Tuple[str, List[List[dict]]]:
+        movie = sess.movie.label if sess.movie else "?"
+        blocks = sess.categories_available
+        rows = []
+        for i, name in enumerate(blocks[:8]):
+            mark = "☑️" if name in sess.categories else "▫️"
+            held = self._block_state(sess, name)
+            rows.append([{"text": f"{mark} {name}{held}", "callback_data": f"sc:{i}"}])
+        rows.append([{"text": "🎟 Any seats", "callback_data": "sc:any"},
+                     {"text": f"✔ Done ({len(sess.categories)})", "callback_data": "sc:done"}])
+        text = (f"🎬 <b>{esc(movie)}</b>\n\n"
+                "<b>Which seat block?</b>\n"
+                "Pick one to be alerted only when <i>that</i> block has seats — "
+                "useful when the good rows are held back.\n"
+                "<i>Any seats</i> alerts on the whole show instead.")
+        return text, rows
+
+    def _block_state(self, sess: Session, name: str) -> str:
+        """' — held back' when every show has that block at zero right now."""
+        total = free = 0
+        for day in sess.shows_by_date.values():
+            for show in day:
+                if sess.theatres and not any(t.lower() in show.venue.lower()
+                                             for t in sess.theatres):
+                    continue
+                cat = show.category(name)
+                if cat:
+                    total += 1
+                    free += 1 if cat.seats_avail > 0 else 0
+        if total and not free:
+            return "  — all held back"
+        if total:
+            return f"  — {free}/{total} shows have seats"
+        return ""
+
+    def _show_seats(self, chat_id: str, message_id: int) -> None:
+        sess = self.session(chat_id)
+        sess.categories_available = self._seat_blocks(sess)
+        if not sess.categories_available:
+            return self._confirm(chat_id, message_id)      # nothing on sale to split
+        text, rows = self._seat_rows(sess)
+        self._edit(chat_id, message_id, text, keyboard=rows)
+
     # -- confirm and save --------------------------------------------------
 
     def _preview(self, sess: Session) -> str:
@@ -507,6 +568,7 @@ class Bot:
         probe = Watch(
             id="preview", movie="preview",
             theatres=list(sess.theatres),
+            categories=list(sess.categories),
             slots=list(sess.slots),
             windows=[(TIME_SLOTS[k]["from"], TIME_SLOTS[k]["to"])
                      for k in sess.slots if k in TIME_SLOTS])
@@ -531,6 +593,11 @@ class Bot:
                 return ("⚠️ <b>That theatre has no shows on those dates yet.</b>\n"
                         "Fine if you're waiting for it to add some — otherwise go "
                         "back and widen the dates or theatres.")
+        if sess.categories:
+            names = ", ".join(sess.categories)
+            return (f"🎟 <b>{esc(names)} is fully held back right now</b> — 0 seats "
+                    f"across {len(pool)} show(s). That's exactly what you're "
+                    "waiting for: you'll be pinged the moment it opens.")
         if sess.slots:
             where = "that theatre has" if sess.theatres else "there are"
             return (f"⚠️ <b>No show matches your timings yet</b> — {where} "
@@ -545,6 +612,7 @@ class Bot:
         where = "\n".join(f"   • {esc(t)}" for t in sess.theatres) or "   • Any theatre"
         when = ", ".join(pretty_date(d) for d in sess.dates) or "Any date"
         times = describe_slots(sess.slots)
+        seats = ", ".join(sess.categories) or "Any seats"
         self._edit(
             chat_id, message_id,
             "<b>Create this alert?</b>\n\n"
@@ -552,7 +620,8 @@ class Bot:
             f"📍 {esc(city['city_name'])}\n"
             f"🏛 Theatres:\n{where}\n"
             f"📅 {esc(when)}\n"
-            f"🕐 {esc(times)}\n\n"
+            f"🕐 {esc(times)}\n"
+            f"🎟 {esc(seats)}\n\n"
             f"{self._preview(sess)}",
             keyboard=[[{"text": "✅ Create alert", "callback_data": "ok"}],
                       [{"text": "◀ Change dates", "callback_data": "back:dates"}],
@@ -566,7 +635,7 @@ class Bot:
             return self._edit(chat_id, message_id, "That selection expired — try /add again.")
 
         existing = self.store.duplicate_of(chat_id, movie.code, sess.theatres,
-                                           sess.dates, sess.slots)
+                                           sess.dates, sess.slots, sess.categories)
         if existing:
             sess.reset()
             return self._edit(chat_id, message_id,
@@ -583,6 +652,7 @@ class Bot:
             "theatres": list(sess.theatres),
             "dates": list(sess.dates),
             "slots": list(sess.slots),
+            "categories": list(sess.categories),
         })
         sess.reset()
         self.on_change()
@@ -606,10 +676,11 @@ class Bot:
                 where = ", ".join(w.get("theatres") or []) or "any theatre"
                 when = ", ".join(pretty_date(d) for d in (w.get("dates") or [])) or "any date"
                 times = describe_slots(w.get("slots") or [])
+                blocks = ", ".join(w.get("categories") or []) or "any seats"
                 state = "" if w.get("enabled", True) else "  <i>(paused)</i>"
                 lines.append(f"🎬 <b>{esc(w.get('movie'))}</b>{state}\n"
                              f"   🏛 {esc(where)}\n   📅 {esc(when)}\n"
-                             f"   🕐 {esc(times)}")
+                             f"   🕐 {esc(times)}\n   🎟 {esc(blocks)}")
                 rows.append([{"text": f"🗑 {str(w.get('movie'))[:40]}",
                               "callback_data": f"rm:{w.get('id')}"}])
             rows.append([{"text": "➕ New alert", "callback_data": "add"}])
@@ -695,9 +766,9 @@ class Bot:
         elif head == "tm":
             if tail == "any":
                 sess.slots = []
-                return self._confirm(chat_id, message_id)
+                return self._show_seats(chat_id, message_id)
             if tail == "done":
-                return self._confirm(chat_id, message_id)
+                return self._show_seats(chat_id, message_id)
             if tail.isdigit() and int(tail) < len(SLOT_ORDER):
                 key = SLOT_ORDER[int(tail)]
                 if key in sess.slots:
@@ -705,6 +776,20 @@ class Bot:
                 else:
                     sess.slots.append(key)
                 return self._show_times(chat_id, message_id)
+        elif head == "sc":
+            if tail == "any":
+                sess.categories = []
+                return self._confirm(chat_id, message_id)
+            if tail == "done":
+                return self._confirm(chat_id, message_id)
+            if tail.isdigit() and int(tail) < len(sess.categories_available):
+                name = sess.categories_available[int(tail)]
+                if name in sess.categories:
+                    sess.categories.remove(name)
+                else:
+                    sess.categories.append(name)
+                text, rows = self._seat_rows(sess)
+                return self._edit(chat_id, message_id, text, keyboard=rows)
         elif head == "rm":
             removed = self.store.remove(tail)
             self.on_change()

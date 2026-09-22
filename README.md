@@ -157,7 +157,21 @@ none do, which filter is responsible — the theatre, or the timings. Zero is a
 perfectly good answer when booking hasn't opened; it just shouldn't be a
 surprise.
 
-Show timings are the last filter, and they matter more than they look: on a
+**Seat blocks are the last filter, and the sharpest one.** Cinemas routinely
+hold back the good centre rows — they show up in the data as a price block with
+zero seats out of a non-zero total:
+
+```
+PLATINUM  ₹449   0 / 14     ← held back
+GOLD      ₹390   8 / 226    ← on sale
+```
+
+Watching `PLATINUM` there means the show is ignored while the block is held,
+and alerts the instant any of those 14 seats is released. The bot marks a
+block "— all held back" when every matching show has it at zero, so you can
+see what you're waiting for before you commit.
+
+Show timings matter more than they look too: on a
 big release a single day can carry 200+ shows across the city. Picking
 *Evening + Night* means you're only woken for the ones you'd actually book.
 Late night is its own slot because 1 AM and 4 AM benefit shows are a real
@@ -383,7 +397,8 @@ restart and can span several runs rather than blocking anything.
 | `formats` | `[IMAX, EPIQ, PCX, 4DX, DOLBY]`. Matches screen format *or* attribute |
 | `languages` | `[Telugu, Hindi]` |
 | `require_seats` | `true` = only alert when seats are actually free (seat sniping) |
-| `min_seats` | Minimum free seats when `require_seats` is on |
+| `categories` | Seat blocks to watch, e.g. `[PLATINUM]` or `[DIRECTOR CHOICE]`. Alerts only when *that* block has seats |
+| `min_seats` | Minimum free seats — applied to the chosen block when `categories` is set, otherwise to the show |
 | `slots` | `[evening, night]` — any of `morning`, `afternoon`, `evening`, `night`, `latenight`. Empty = any time |
 | `time_between` | `["18:00", "23:59"]` for an exact range instead of a named slot. May wrap past midnight |
 | `enabled` | `false` parks a watch without deleting it |

@@ -12,6 +12,28 @@ _SOLD_OUT = {"S", "N"}
 
 
 @dataclass
+class SeatCategory:
+    """One price block within a show — "GOLD", "PLATINUM", "DIRECTOR CHOICE".
+
+    A blocked-off centre section shows up here as a category with
+    seats_avail 0 out of a non-zero total.
+    """
+    desc: str
+    price: Optional[float]
+    seats_avail: int
+    max_seats: int
+
+    @property
+    def sold_out(self) -> bool:
+        return self.seats_avail <= 0
+
+    @property
+    def label(self) -> str:
+        price = f" ₹{self.price:.0f}" if self.price is not None else ""
+        return f"{self.desc}{price}"
+
+
+@dataclass
 class Show:
     date_code: str          # "20260925"
     venue: str              # "Prasads Multiplex: Hyderabad"
@@ -25,6 +47,14 @@ class Show:
     seats_avail: int
     min_price: Optional[float]
     max_price: Optional[float]
+    categories: List[SeatCategory] = field(default_factory=list)
+
+    def category(self, needle: str) -> Optional[SeatCategory]:
+        low = needle.lower()
+        for cat in self.categories:
+            if low in cat.desc.lower():
+                return cat
+        return None
 
     @property
     def sold_out(self) -> bool:
@@ -76,14 +106,27 @@ def _as_float(value: Any) -> Optional[float]:
         return None
 
 
-def _seats(show: Dict[str, Any]) -> int:
-    total = 0
+def _int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _categories(show: Dict[str, Any]) -> List[SeatCategory]:
+    out = []
     for cat in show.get("Categories") or []:
-        try:
-            total += int(cat.get("SeatsAvail") or 0)
-        except (TypeError, ValueError):
+        desc = (cat.get("PriceDesc") or "").strip()
+        if not desc:
             continue
-    return total
+        out.append(SeatCategory(desc=desc, price=_as_float(cat.get("CurPrice")),
+                                seats_avail=_int(cat.get("SeatsAvail")),
+                                max_seats=_int(cat.get("MaxSeats"))))
+    return out
+
+
+def _seats(show: Dict[str, Any]) -> int:
+    return sum(_int(c.get("SeatsAvail")) for c in (show.get("Categories") or []))
 
 
 def parse_showtimes(payload: Dict[str, Any], event_code: str, requested_date: str) -> Snapshot:
@@ -149,6 +192,7 @@ def parse_showtimes(payload: Dict[str, Any], event_code: str, requested_date: st
                         seats_avail=_seats(st),
                         min_price=_as_float(st.get("MinPrice")),
                         max_price=_as_float(st.get("MaxPrice")),
+                        categories=_categories(st),
                     )
                 )
 

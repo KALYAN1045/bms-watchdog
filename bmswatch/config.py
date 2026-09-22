@@ -102,6 +102,7 @@ class Watch:
     languages: List[str] = field(default_factory=list)
     require_seats: bool = False
     min_seats: int = 1
+    categories: List[str] = field(default_factory=list)  # seat blocks to watch
     slots: List[str] = field(default_factory=list)          # named time slots
     windows: List[Tuple[int, int]] = field(default_factory=list)  # minutes, inclusive
     enabled: bool = True
@@ -243,6 +244,7 @@ def _build_watch(raw: Dict[str, Any], defaults: Dict[str, Any], index: int) -> W
         languages=as_list("languages"),
         require_seats=bool(merged.get("require_seats", False)),
         min_seats=int(merged.get("min_seats", 1)),
+        categories=as_list("categories"),
         slots=slots,
         windows=windows,
         enabled=bool(merged.get("enabled", True)),
