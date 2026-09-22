@@ -29,8 +29,17 @@
 name: watch
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
+  # Schedule disabled. Two independent reasons, both observed on this repo:
+  #
+  #  1. Cloudflare refuses GitHub's runner IPs *intermittently* -- of the first
+  #     four runs, two reached BookMyShow and two were blocked. A watchdog that
+  #     works half the time is not a watchdog.
+  #  2. GitHub drops scheduled runs on low-activity repos. A "*/5" cron
+  #     produced 4 runs in 9 hours, not the ~108 it implies.
+  #
+  # Re-enable by uncommenting, but prefer a machine on a residential IP.
+  # schedule:
+  #   - cron: "*/30 * * * *"
   workflow_dispatch:
 
 concurrency:
